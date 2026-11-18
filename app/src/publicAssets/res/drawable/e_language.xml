@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lucide globe. License in assets/third-party/Lucide-LICENSE.txt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp"
+    android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M2,12 a10,10 0 1 0 20,0 a10,10 0 1 0 -20,0Z" android:fillColor="#00000000" android:strokeColor="#FF1F1F1F" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" android:fillColor="#00000000" android:strokeColor="#FF1F1F1F" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M2 12h20" android:fillColor="#00000000" android:strokeColor="#FF1F1F1F" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

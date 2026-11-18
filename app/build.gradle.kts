@@ -3,6 +3,16 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+val publicAssets = file("src/publicAssets")
+val publicResources = publicAssets.resolve("res")
+val localResources = file("src/main/res")
+val resourceOverrides = fileTree(publicResources).files.map { it.relativeTo(publicResources) }
+val localOverrideCount = resourceOverrides.count { localResources.resolve(it).isFile }
+check(localOverrideCount == 0 || localOverrideCount == resourceOverrides.size) {
+    "Only part of the local artwork is present. Restore every local asset or use a clean checkout for the public artwork."
+}
+
 android {
     namespace = "cc.catsco.android"
     compileSdk = 36
@@ -20,6 +30,12 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+    if (localOverrideCount == 0) {
+        sourceSets.getByName("main") {
+            res.srcDir(publicResources)
+            assets.srcDir(publicAssets.resolve("assets"))
         }
     }
     compileOptions {

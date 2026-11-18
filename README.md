@@ -2,6 +2,8 @@
 
 2026-11-18 的安卓源码包含联系人固定搜索、创建群组时的键盘避让和取消重置，以及打开侧栏时收起键盘并保留草稿。这三项已通过真机复查。其余模块范围见 [迁移状态](docs/ROADMAP.md)。
 
+安卓手机可从 [GitHub Releases](https://github.com/yangjiazun098o-droid/catsco-android/releases) 下载测试版 APK，安装后用自己的 CatsCo 账号登录。最低支持 Android 8。
+
 安卓原生工程，Kotlin + Jetpack Compose。视觉与结构参照 `buildsense-ai/catsco-ios` 的 `3fcb674c94dc1b6349878125b0a2a44244914383`，详见 [来源记录](docs/PROVENANCE.md)。
 
 ## 工程结构
@@ -17,9 +19,9 @@
 
 ### 准备 Android 资源
 
-仓库提供 25 个项目图标的 [SVG 源文件](design-assets/icons/svg) 和对应的 Android 矢量资源。另有 29 个在用 Android 矢量文件来自许可尚待核实的 Aichat 图标集。[图标清单](design-assets/icons/manifest.json)记录了它们的来源与校验值。[图标来源](https://www.iconfont.cn/collections/detail?cid=54613)
+从公开仓库直接构建会使用 Noto Sans SC 和 Lucide 图标。仓库同时提供 25 个项目图标的 [SVG 源文件](design-assets/icons/svg) 和对应的 Android 矢量资源。[公开版资源与许可](app/src/publicAssets/README.md)
 
-从有权使用的完整工程副本导入 4 个字体文件及 29 个图标文件。命令会先核对所有文件的 SHA-256，再写入 Android 资源目录。
+如需构建使用普惠体和原图标的内部版本，从有权使用的完整工程副本一次导入 4 个字体文件及 29 个图标文件。命令会先核对所有文件的 SHA-256，再写入 Android 资源目录。[原图标清单](design-assets/icons/manifest.json)
 
 ```sh
 python scripts/restore-mobile-assets.py /path/to/full-catsco-android
@@ -33,7 +35,7 @@ python scripts/restore-mobile-assets.py /path/to/full-catsco-android
 ./gradlew.bat :core:test :app:assembleDebug :app:lintDebug
 ```
 
-macOS 和 Linux 使用 `./gradlew`。真机或模拟器连接后执行 `:app:connectedDebugAndroidTest`。GitHub Actions 运行无需这些资源的 `:core:test`。
+macOS 和 Linux 使用 `./gradlew`。真机或模拟器连接后执行 `:app:connectedDebugAndroidTest`。GitHub Actions 使用公开版资源构建并运行核心测试和 Android Lint。
 
 Debug APK：`app/build/outputs/apk/debug/app-debug.apk`，调试应用 ID `cc.catsco.android.debug`，与未来正式版分开安装。Release ID 暂定 `cc.catsco.android`；第一次上架前由所有者确认，之后不要随意更改。
 
