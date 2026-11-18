@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">CatsCo</string>
+    <string name="task_widget_description">查看最近同步的 CatsCo 任务</string>
+</resources>

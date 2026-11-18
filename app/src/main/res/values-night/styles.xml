@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.CatsCo" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">@font/alibaba_puhuiti</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#0B0B0B</item>
+    </style>
+</resources>

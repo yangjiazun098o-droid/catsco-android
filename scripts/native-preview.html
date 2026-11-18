@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CatsCo · 安卓原生设备</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eeeef0;color:#242426;font:14px system-ui,sans-serif;height:100dvh;display:flex;flex-direction:column}header{padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fff;flex-wrap:wrap;border-bottom:1px solid #ddd}strong{font-size:15px}nav{display:flex;gap:6px;flex-wrap:wrap}button{font:inherit;padding:8px 11px;border:1px solid #ddd;border-radius:8px;background:#fff;color:#333;cursor:pointer}button:focus-visible{outline:2px solid #147c65}main{min-height:0;flex:1;display:flex;justify-content:center;align-items:center;padding:16px}canvas{max-width:100%;max-height:100%;object-fit:contain;box-shadow:0 5px 26px #0002;border:5px solid #252526;border-radius:22px;cursor:pointer;touch-action:manipulation}footer{padding:8px 16px 12px;text-align:center;color:#666;font-size:12px}#status{font-size:12px;color:#666}button:disabled{opacity:.5}
+</style>
+<header><div><strong>CatsCo · 安卓原生设备</strong><div id="status" role="status">连接设备…</div></div><nav><button id="back">返回</button><button id="launch">打开 App</button><button id="theme">切换深色</button><button id="pause">暂停画面</button></nav></header>
+<main><canvas id="screen" width="540" height="1200" aria-label="安卓设备实际画面，可点击操作"></canvas></main><footer id="device-type">Android · 原生 APK · 连续设备画面</footer>
+<script>
+const screen=document.getElementById('screen'),status=document.getElementById('status');let paused=false,dark=false,deviceWidth=540,deviceHeight=1200,deviceLabel='设备';
+async function action(path){try{const response=await fetch(path,{method:'POST'});if(!response.ok)throw Error();status.textContent='操作已发送 · 原生设备连续画面'}catch{status.textContent='设备操作失败，请稍后重试'}}
+let pointerStart;
+function position(event){const box=screen.getBoundingClientRect();return {x:Math.max(0,Math.min(deviceWidth-1,Math.floor((event.clientX-box.left-5)/(box.width-10)*deviceWidth))),y:Math.max(0,Math.min(deviceHeight-1,Math.floor((event.clientY-box.top-5)/(box.height-10)*deviceHeight)))}}
+screen.onpointerdown=event=>{pointerStart=position(event);screen.setPointerCapture(event.pointerId)};
+screen.onpointerup=event=>{if(!pointerStart)return;const end=position(event),start=pointerStart;pointerStart=null;if(Math.hypot(end.x-start.x,end.y-start.y)>20)action('/swipe?x='+start.x+'&y='+start.y+'&endX='+end.x+'&endY='+end.y);else action('/tap?x='+end.x+'&y='+end.y)};
+screen.onpointercancel=()=>pointerStart=null;document.getElementById('back').onclick=()=>action('/back');document.getElementById('launch').onclick=()=>action('/launch');document.getElementById('theme').onclick=()=>{dark=!dark;action('/theme?mode='+(dark?'yes':'no'));document.getElementById('theme').textContent=dark?'切换浅色':'切换深色'};let socket,decoder,videoFrames=0,timestamp=0;const context=screen.getContext('2d',{alpha:false});
+function connectVideo(){
+ if(paused)return;
+ decoder=new VideoDecoder({output:frame=>{if(screen.width!==frame.displayWidth||screen.height!==frame.displayHeight){screen.width=frame.displayWidth;screen.height=frame.displayHeight}context.drawImage(frame,0,0);frame.close();videoFrames++;window.nativeFrames=videoFrames;if(videoFrames===1)status.textContent=deviceLabel+'画面已连接'},error:()=>{status.textContent='视频解码恢复中'}});
+ decoder.configure({codec:'avc1.42E01E',optimizeForLatency:true});
+ socket=new WebSocket('ws://'+location.host+'/video');socket.binaryType='arraybuffer';let started=false;
+ socket.onmessage=event=>{const data=new Uint8Array(event.data);let key=false;for(let i=0;i<data.length-4;i++){if(data[i]===0&&data[i+1]===0&&(data[i+2]===1||data[i+2]===0&&data[i+3]===1)){const at=i+(data[i+2]===1?3:4);if((data[at]&31)===5)key=true;}}if(!started&&!key)return;started=true;if(decoder.state==='configured')try{decoder.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:timestamp+=16667,data}))}catch{started=false}};
+ socket.onclose=()=>{decoder.close();if(!paused)setTimeout(connectVideo,700)};
+}
+document.getElementById('pause').onclick=()=>{paused=!paused;document.getElementById('pause').textContent=paused?'恢复画面':'暂停画面';if(paused)socket?.close();else connectVideo()};
+fetch('/config').then(response=>response.ok?response.json():null).then(config=>{if(!config)return;deviceWidth=config.deviceWidth;deviceHeight=config.deviceHeight;screen.width=config.videoWidth;screen.height=config.videoHeight;if(config.phone){deviceLabel='真机';document.getElementById('theme').hidden=true;document.getElementById('device-type').textContent='安卓真机 · 原生 APK · 连续设备画面'}}).catch(()=>{}).finally(connectVideo);
+</script></html>
+
+

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>CatsCo · 安卓登录预览</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="preview-toolbar">
+    <div class="preview-title"><strong>安卓登录预览</strong><span>交互演示 · 示例响应</span></div>
+    <nav aria-label="预览页面">
+      <button type="button" data-page="login" aria-pressed="true">登录</button>
+      <button type="button" data-page="register" aria-pressed="false">注册</button>
+      <button type="button" data-page="reset" aria-pressed="false">找回密码</button>
+    </nav>
+    <div class="preview-actions">
+      <button type="button" id="keyboard-toggle" aria-pressed="false">模拟键盘</button>
+      <button type="button" id="theme-toggle">切换深色</button>
+    </div>
+  </header>
+  <main class="preview-stage">
+    <div class="device-slot">
+    <section class="device" aria-label="安卓登录页面预览">
+      <div class="phone-screen" id="phone">
+        <canvas id="flow-background" aria-hidden="true"></canvas>
+        <div class="system-bar" aria-hidden="true">
+          <span>9:41</span>
+          <span class="system-icons">
+            <svg viewBox="0 0 20 16"><path d="M2 13v-2m5 2V8m5 5V5m5 8V2" stroke-width="2.5"/></svg>
+            <svg viewBox="0 0 20 16"><path d="M2 5a12 12 0 0 1 16 0M5 8a7 7 0 0 1 10 0m-7 3a3 3 0 0 1 4 0"/><circle cx="10" cy="14" r=".8" fill="currentColor" stroke="none"/></svg>
+            <svg viewBox="0 0 25 16"><rect x="1" y="3" width="20" height="11" rx="2.5"/><path d="M24 6v5"/><rect x="3.5" y="5.5" width="15" height="6" rx="1" fill="currentColor" stroke="none"/></svg>
+          </span>
+        </div>
+        <div class="auth-scroll" id="auth-scroll">
+          <section class="auth-card" aria-label="登录">
+            <div class="brand"><span class="wordmark" role="img" aria-label="CatsCo"></span></div>
+            <p class="reset-intro" id="reset-intro" hidden>验证注册邮箱，设置新密码。</p>
+            <form id="auth-form" novalidate>
+              <div class="field-group" id="account-group">
+                <div class="field"><input id="account" name="username" aria-label="用户名或邮箱" placeholder="用户名或邮箱" autocomplete="username" autocapitalize="none" spellcheck="false" enterkeyhint="next"></div>
+                <p class="field-error" id="account-error" hidden></p>
+              </div>
+              <div class="field-group" id="code-group" hidden>
+                <div class="code-row">
+                  <div class="field"><input id="code" name="code" aria-label="邮箱验证码" placeholder="邮箱验证码" autocomplete="one-time-code" inputmode="numeric" maxlength="8" enterkeyhint="next"></div>
+                  <button class="code-button" id="send-code" type="button">发送验证码</button>
+                </div>
+                <p class="field-error" id="code-error" hidden></p>
+                <p class="field-hint" id="code-hint" role="status" hidden></p>
+              </div>
+              <div class="field-group" id="password-group">
+                <div class="field password-field">
+                  <input id="password" name="password" type="password" aria-label="密码" placeholder="密码" autocomplete="current-password" enterkeyhint="go">
+                  <button class="password-toggle" type="button" data-input="password" aria-label="显示密码" aria-pressed="false"></button>
+                </div>
+                <p class="field-error" id="password-error" hidden></p>
+              </div>
+              <div class="field-group" id="confirm-group" hidden>
+                <div class="field password-field">
+                  <input id="confirm" name="confirmPassword" type="password" aria-label="确认新密码" placeholder="确认新密码" autocomplete="new-password" enterkeyhint="go">
+                  <button class="password-toggle" type="button" data-input="confirm" aria-label="显示确认密码" aria-pressed="false"></button>
+                </div>
+                <p class="field-error" id="confirm-error" hidden></p>
+              </div>
+              <div class="field-group" id="invite-group" hidden>
+                <div class="field"><input id="invite" name="inviteCode" aria-label="邀请码" placeholder="邀请码" autocapitalize="characters" autocomplete="off" spellcheck="false" enterkeyhint="go"></div>
+              </div>
+              <p id="form-feedback" class="form-feedback" role="status" hidden></p>
+              <button id="submit" class="primary-button" type="submit"><span id="submit-label">登录</span></button>
+            </form>
+            <div class="auth-footer" id="login-footer"><span>还没有账号？</span><button type="button" data-page="register">立即注册</button><button type="button" data-page="reset" class="forgot-link">忘记密码？</button></div>
+            <div class="auth-footer" id="register-footer" hidden><span>已有账号？</span><button type="button" data-page="login">立即登录</button></div>
+            <div class="auth-footer" id="reset-footer" hidden><span>想起密码了？</span><button type="button" data-page="login">返回登录</button></div>
+          </section>
+          <button class="server-link" type="button" id="server-open">服务器设置</button>
+        </div>
+        <div class="mock-keyboard" id="mock-keyboard" aria-label="模拟键盘" hidden>
+          <div class="keyboard-header"><span id="keyboard-hint">输入账号或密码</span><button type="button" id="keyboard-close">收起</button></div>
+          <div class="keyboard-keys" aria-hidden="true">
+            <div><span>q</span><span>w</span><span>e</span><span>r</span><span>t</span><span>y</span><span>u</span><span>i</span><span>o</span><span>p</span></div>
+            <div><span>a</span><span>s</span><span>d</span><span>f</span><span>g</span><span>h</span><span>j</span><span>k</span><span>l</span></div>
+            <div><span class="key-wide">⇧</span><span>z</span><span>x</span><span>c</span><span>v</span><span>b</span><span>n</span><span>m</span><span class="key-wide">⌫</span></div>
+          </div>
+          <div class="keyboard-bottom"><span>?123</span><span class="space-key">空格</span><button type="button" id="keyboard-next">下一项</button></div>
+        </div>
+        <div class="system-navigation" aria-hidden="true"><span></span></div>
+        <div class="server-overlay" id="server-dialog" role="dialog" aria-modal="true" aria-labelledby="server-title" hidden>
+          <form id="server-form" class="server-sheet" novalidate>
+            <div class="sheet-handle" aria-hidden="true"></div>
+            <h2 id="server-title">服务器设置</h2>
+            <label for="server-address">HTTPS 服务器</label>
+            <div class="field"><input id="server-address" type="url" value="https://app.catsco.cc" aria-label="HTTPS 服务器" autocapitalize="none" spellcheck="false"></div>
+            <p class="field-error" id="server-error" hidden></p>
+            <button class="primary-button" type="submit">完成</button>
+          </form>
+        </div>
+      </div>
+    </section>
+    </div>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

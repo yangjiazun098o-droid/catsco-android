@@ -1,0 +1,34 @@
+{
+  "family": "Alibaba PuHuiTi 2.0",
+  "source": "阿里巴巴普惠体 2.0.zip",
+  "files": [
+    {
+      "weight": 400,
+      "source": "Alibaba_PuHuiTi_2.0_55_Regular_55_Regular.ttf",
+      "resource": "alibaba_puhuiti_regular.ttf",
+      "bytes": 8449680,
+      "sha256": "a22ad467d9d6b4c9a0b2e033927ed41592743c987546a7397215ce96b850743b"
+    },
+    {
+      "weight": 500,
+      "source": "Alibaba_PuHuiTi_2.0_65_Medium_65_Medium.ttf",
+      "resource": "alibaba_puhuiti_medium.ttf",
+      "bytes": 8347080,
+      "sha256": "b3f675ccfc65edd6f27432dec6639b1414e9dc627831791263a99e2d711d215d"
+    },
+    {
+      "weight": 600,
+      "source": "Alibaba_PuHuiTi_2.0_75_SemiBold_75_SemiBold.ttf",
+      "resource": "alibaba_puhuiti_semibold.ttf",
+      "bytes": 8293500,
+      "sha256": "26ba18472bdf8115ea7990f6798b12ef02ac6462993811c0974565de1c4bcc26"
+    },
+    {
+      "weight": 700,
+      "source": "Alibaba_PuHuiTi_2.0_55_Regular_85_Bold.ttf",
+      "resource": "alibaba_puhuiti_bold.ttf",
+      "bytes": 8289188,
+      "sha256": "95db198aa30a998fdb38dd0a4b9b44eb383c19c85c43d6506b25e2b4d138fa08"
+    }
+  ]
+}

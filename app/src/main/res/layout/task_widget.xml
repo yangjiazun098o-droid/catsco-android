@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="18dp" android:background="@drawable/widget_background">
+    <TextView android:fontFamily="@font/alibaba_puhuiti" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="CatsCo" android:textSize="20sp" android:textStyle="bold" android:textColor="#147C65" />
+    <TextView android:fontFamily="@font/alibaba_puhuiti" android:id="@+id/widget_tasks" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:layout_marginTop="12dp" android:textSize="14sp" android:textColor="#1F1F1F" android:maxLines="7" android:ellipsize="end" />
+    <TextView android:fontFamily="@font/alibaba_puhuiti" android:id="@+id/widget_sync" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:textSize="12sp" android:textColor="#747479" />
+</LinearLayout>
