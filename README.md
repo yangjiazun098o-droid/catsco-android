@@ -17,7 +17,13 @@
 
 ### 准备 Android 资源
 
-公开仓库保留应用源码和可公开的资源。构建 Android App 前，从已有的完整工程副本导入 `app/src/main/res/font/alibaba_puhuiti_*.ttf`，以及 `.gitignore` 列出的 `app/src/main/res/drawable/` 矢量资源，放回本仓库的相同路径。矢量资源来自许可尚待核实的第三方图标库，需要从有权使用的项目副本获取。[图标来源](https://www.iconfont.cn/collections/detail?cid=54613)
+仓库提供 25 个项目图标的 [SVG 源文件](design-assets/icons/svg) 和对应的 Android 矢量资源。另有 29 个在用 Android 矢量文件来自许可尚待核实的 Aichat 图标集。[图标清单](design-assets/icons/manifest.json)记录了它们的来源与校验值。[图标来源](https://www.iconfont.cn/collections/detail?cid=54613)
+
+从有权使用的完整工程副本导入 4 个字体文件及 29 个图标文件。命令会先核对所有文件的 SHA-256，再写入 Android 资源目录。
+
+```sh
+python scripts/restore-mobile-assets.py /path/to/full-catsco-android
+```
 
 阿里巴巴普惠体 2.0 的 Regular、Medium、SemiBold 和 Bold 也可通过官方渠道单独获取。将四个 TTF 按 [字体清单](design-assets/fonts/manifest.json) 的 `resource` 字段命名并置于 `app/src/main/res/font/`。如果使用工程原配格式的 ZIP，可以运行 `python scripts/import-puhuiti.py <字体ZIP路径>`。[阿里巴巴字体官网](https://www.alibabafonts.com/)
 

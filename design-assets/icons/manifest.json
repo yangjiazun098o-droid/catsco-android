@@ -1,0 +1,303 @@
+{
+  "projectIcons": [
+    {
+      "name": "attachment-camera",
+      "svg": "svg/attachment-camera.svg",
+      "androidResources": [
+        "e_attachment_camera"
+      ]
+    },
+    {
+      "name": "attachment-photo",
+      "svg": "svg/attachment-photo.svg",
+      "androidResources": [
+        "e_attachment_photo"
+      ]
+    },
+    {
+      "name": "attachment-folder",
+      "svg": "svg/attachment-folder.svg",
+      "androidResources": [
+        "e_attachment_folder"
+      ]
+    },
+    {
+      "name": "agent",
+      "svg": "svg/agent.svg",
+      "androidResources": [
+        "e_agent"
+      ]
+    },
+    {
+      "name": "attachment",
+      "svg": "svg/attachment.svg",
+      "androidResources": [
+        "e_attach"
+      ]
+    },
+    {
+      "name": "camera",
+      "svg": "svg/camera.svg",
+      "androidResources": [
+        "e_camera"
+      ]
+    },
+    {
+      "name": "chart",
+      "svg": "svg/chart.svg",
+      "androidResources": [
+        "e_chart"
+      ]
+    },
+    {
+      "name": "cloud",
+      "svg": "svg/cloud.svg",
+      "androidResources": [
+        "e_cloud"
+      ]
+    },
+    {
+      "name": "contrast",
+      "svg": "svg/contrast.svg",
+      "androidResources": [
+        "e_contrast"
+      ]
+    },
+    {
+      "name": "delete",
+      "svg": "svg/delete.svg",
+      "androidResources": [
+        "e_delete"
+      ]
+    },
+    {
+      "name": "document",
+      "svg": "svg/document.svg",
+      "androidResources": [
+        "e_file",
+        "message_document"
+      ]
+    },
+    {
+      "name": "eye-off",
+      "svg": "svg/eye-off.svg",
+      "androidResources": [
+        "message_eye_off"
+      ]
+    },
+    {
+      "name": "image",
+      "svg": "svg/image.svg",
+      "androidResources": [
+        "e_image"
+      ]
+    },
+    {
+      "name": "microphone",
+      "svg": "svg/microphone.svg",
+      "androidResources": [
+        "e_mic"
+      ]
+    },
+    {
+      "name": "pin",
+      "svg": "svg/pin.svg",
+      "androidResources": [
+        "e_pin"
+      ]
+    },
+    {
+      "name": "refresh",
+      "svg": "svg/refresh.svg",
+      "androidResources": [
+        "e_refresh"
+      ]
+    },
+    {
+      "name": "quote",
+      "svg": "svg/quote.svg",
+      "androidResources": [
+        "message_quote"
+      ]
+    },
+    {
+      "name": "sparkle",
+      "svg": "svg/sparkle.svg",
+      "androidResources": [
+        "e_sparkle"
+      ]
+    },
+    {
+      "name": "star",
+      "svg": "svg/star.svg",
+      "androidResources": [
+        "e_star"
+      ]
+    },
+    {
+      "name": "widgets",
+      "svg": "svg/widgets.svg",
+      "androidResources": [
+        "e_widgets"
+      ]
+    },
+    {
+      "name": "arrow-right",
+      "svg": "svg/arrow-right.svg",
+      "androidResources": [
+        "e_next"
+      ]
+    },
+    {
+      "name": "stop",
+      "svg": "svg/stop.svg",
+      "androidResources": [
+        "e_stop"
+      ]
+    },
+    {
+      "name": "circle",
+      "svg": "svg/circle.svg",
+      "androidResources": [
+        "e_circle"
+      ]
+    },
+    {
+      "name": "check-circle",
+      "svg": "svg/check-circle.svg",
+      "androidResources": [
+        "e_check_circle"
+      ]
+    },
+    {
+      "name": "progress-circle",
+      "svg": "svg/progress-circle.svg",
+      "androidResources": [
+        "e_progress_circle"
+      ]
+    }
+  ],
+  "thirdPartyIconCollection": {
+    "name": "Aichat",
+    "author": "UI_ivan",
+    "url": "https://www.iconfont.cn/collections/detail?cid=54613"
+  },
+  "localAndroidResources": [
+    {
+      "file": "e_account.xml",
+      "sha256": "17bb6852bee53fb057866d92d6ed7c694992b1604765dd09f02162a733b5c132"
+    },
+    {
+      "file": "e_add.xml",
+      "sha256": "f6e23316ae8525b1daa2a3fb8f34055eb6085b18fbc191b530d24de0ec97860b"
+    },
+    {
+      "file": "e_apps.xml",
+      "sha256": "5d36ba435f43849dc56b7dcf1d740b5fcef644da4b4437cf6917e9589d5b879c"
+    },
+    {
+      "file": "e_chat.xml",
+      "sha256": "4e02f134793eb64f1bba4a577110b20cdbaa15247879f01983a96da9a494a563"
+    },
+    {
+      "file": "e_chevron_right.xml",
+      "sha256": "f4fd7220d4c9f46523d93c6912dada982eeb4bf004efb022c354420d0bc6ef17"
+    },
+    {
+      "file": "e_close.xml",
+      "sha256": "ec036b56abf157e2ccb77602b4d7a55124a299d9371e471c254b29827373cde9"
+    },
+    {
+      "file": "e_computer.xml",
+      "sha256": "57aa7eb565d2afbd67703b0b8b319fa897c48fb56438246974c84d3d27226109"
+    },
+    {
+      "file": "e_download.xml",
+      "sha256": "84895c0fe78014f7f6cfe710bdcdf8441c53fe3f4f302aa6285112750a502ebd"
+    },
+    {
+      "file": "e_edit.xml",
+      "sha256": "96549d60e430f8b29abdd10546a492985aafb7c34da0dec68015d2100b92450c"
+    },
+    {
+      "file": "e_expand.xml",
+      "sha256": "70b733d1e6465f429bdaae527ee3837c1c55d9790cec5d8d319f571987cb3f6e"
+    },
+    {
+      "file": "e_external.xml",
+      "sha256": "741afd36daad6757565f05524bcadd220faf0585ef15bc960f5a4039adbecd0e"
+    },
+    {
+      "file": "e_key.xml",
+      "sha256": "9f6ad373719ff0b729dbb0379acab93651bd697eb59b05cc8d9ddffb8c2bb088"
+    },
+    {
+      "file": "e_knowledge.xml",
+      "sha256": "4fb8d06f9106e8c083723701e980cfe5892b8b27c111fd640536c2155260c706"
+    },
+    {
+      "file": "e_language.xml",
+      "sha256": "388d3cde1d2968b447d56108d5d290e3f2c94f9d0340aff231d431f9bb314e75"
+    },
+    {
+      "file": "e_menu.xml",
+      "sha256": "740ae37aa0f7ab54e8de6967d6610a5bc54046f83f3e9ff1e5d124d623379e98"
+    },
+    {
+      "file": "e_more.xml",
+      "sha256": "1c5caa3db95798defdb7a3b48d343bdd3ea818b72f1188bfed7762adcc15f648"
+    },
+    {
+      "file": "e_new_task.xml",
+      "sha256": "0bacfa063f198eacd1c95d966a8268444cc217fc6f36080bfffc177d931d3ac2"
+    },
+    {
+      "file": "e_notifications.xml",
+      "sha256": "9a6979b77b09cfd42473454d2e6bd328af6e0a8434dd39c69c39797ebb4d8ff0"
+    },
+    {
+      "file": "e_people.xml",
+      "sha256": "047c5b13420405075985286d9647396cc261e43042500180e75157aa082d1585"
+    },
+    {
+      "file": "e_search.xml",
+      "sha256": "aabd86f208de6fdf7f4707e0e91d3d189586182e696e115cc35339365c145ccf"
+    },
+    {
+      "file": "e_select.xml",
+      "sha256": "ba0c032e0bebcecf36eec12ba55d65d4cbf38d2b06e027f64a5a93d3287a3c68"
+    },
+    {
+      "file": "e_send.xml",
+      "sha256": "cc82f80dd3933baf0bfb785d3bbdf4c9705337bdad03fcbcd945ddda9711c7ee"
+    },
+    {
+      "file": "e_send_active.xml",
+      "sha256": "cc82f80dd3933baf0bfb785d3bbdf4c9705337bdad03fcbcd945ddda9711c7ee"
+    },
+    {
+      "file": "e_settings.xml",
+      "sha256": "d5266f5598b4fcd91205fb36716893274fc7d17b6d75a4f91089069f926f3090"
+    },
+    {
+      "file": "e_sidebar.xml",
+      "sha256": "6587f05538038cb39efe4acb287650486ee7ad76063339404fdf8c205683a2db"
+    },
+    {
+      "file": "e_sidebar_active.xml",
+      "sha256": "740ae37aa0f7ab54e8de6967d6610a5bc54046f83f3e9ff1e5d124d623379e98"
+    },
+    {
+      "file": "message_copy.xml",
+      "sha256": "0d9b1cb66756a358091ff0531190035447a831fe5f955c6b7a207c3556e102b5"
+    },
+    {
+      "file": "message_eye.xml",
+      "sha256": "9659572edb7dd464a88b02b0084920cc4b94cd5230a4f0160ae86c01750be18d"
+    },
+    {
+      "file": "message_terminal.xml",
+      "sha256": "34139c3ba77bb7567f3e3ec1507eae2fec061884bb025293090bf3cbb4738ea6"
+    }
+  ]
+}
