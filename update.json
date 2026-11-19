@@ -1,16 +1,16 @@
 [
   {
-    "tag_name": "v0.1.0-preview.4",
-    "prerelease": true,
+    "tag_name": "v0.1.0-preview.5",
+    "draft": false,
     "assets": [
       {
-        "size": 52904443,
-        "digest": "sha256:2cee7e588a8ecb7108f48ae774accf503f69b2bb08e7a183957e8b194e921675",
-        "browser_download_url": "https://github.com/yangjiazun098o-droid/catsco-android/releases/download/v0.1.0-preview.4/CatsCo-Android-Preview.apk",
+        "name": "CatsCo-Android-Preview.apk",
         "state": "uploaded",
-        "name": "CatsCo-Android-Preview.apk"
+        "size": 52954269,
+        "digest": "sha256:32eeb2a13014ead4fdc34c85c7c19e4bfa2eef18334bc877834cff889d45c082",
+        "browser_download_url": "https://github.com/yangjiazun098o-droid/catsco-android/releases/download/v0.1.0-preview.5/CatsCo-Android-Preview.apk"
       }
     ],
-    "draft": false
+    "prerelease": true
   }
 ]
