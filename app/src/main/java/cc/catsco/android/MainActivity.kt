@@ -12,7 +12,10 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cc.catsco.android.ui.CatsCoApp
+import cc.catsco.android.ui.CatsCoSessionSplash
 import cc.catsco.android.ui.CatsCoTheme
+import cc.catsco.android.ui.WorkspaceNotificationApp
+import cc.catsco.android.ui.WorkspaceNotificationKind
 
 class MainActivity : ComponentActivity() {
     private var inboundIntent by mutableStateOf<Intent?>(null)
@@ -27,6 +30,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val model: WorkspaceViewModel = viewModel()
             val state by model.state.collectAsStateWithLifecycle()
+            val inbox by model.notifications.collectAsStateWithLifecycle()
             val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
             DisposableEffect(owner, model) {
                 val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -61,7 +65,20 @@ class MainActivity : ComponentActivity() {
                 val bars = if (dark) SystemBarStyle.dark(transparent) else SystemBarStyle.light(transparent, transparent)
                 enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
             }
-            CatsCoTheme(dark = dark) { CatsCoApp(state, model) }
+            CatsCoTheme(dark = dark) {
+                if (state.restoringSession) {
+                    CatsCoSessionSplash()
+                } else if (state.session == null || state.preview) {
+                    CatsCoApp(state, model)
+                } else key(state.session?.server, state.session?.userId, state.localDataEpoch) {
+                    val quotaNotice = if (state.page == inbox.quotaPage) inbox.items.firstOrNull {
+                        it.kind == WorkspaceNotificationKind.Quota &&
+                            (state.page == "home" || state.page == "chat/${it.topic}")
+                    } else null
+                    WorkspaceNotificationApp(state, model, inbox.items, inbox.latestKey,
+                        model::readAllNotifications, model::openNotification, model::resolveNotificationReply, quotaNotice)
+                }
+            }
         }
     }
 

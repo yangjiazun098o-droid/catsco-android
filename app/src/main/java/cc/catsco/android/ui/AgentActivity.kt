@@ -21,19 +21,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.catsco.android.R
-import cc.catsco.android.WorkspaceState
 import cc.catsco.android.data.MessageTurn
-
-internal val WorkspaceState.conversationRunning: Boolean
-    get() = page.startsWith("chat/") && (
-        workspace.conversations.any { "chat/${it.id}" == page && it.active } ||
-            messages.any { it.streaming } || stoppingTopic == page.removePrefix("chat/")
-        )
 
 internal fun agentActivityLabel(turn: MessageTurn, active: Boolean, stopping: Boolean): String? {
     if (!turn.assistant) return null
@@ -43,6 +37,7 @@ internal fun agentActivityLabel(turn: MessageTurn, active: Boolean, stopping: Bo
         "failed", "completed", "replied", "cancelled", "stopped", "paused", "waiting_for_input", "disconnected" -> null
         "stopping", "stop-requested" -> "正在停止"
         "queued", "waiting" -> "等待执行"
+        "awaiting_reply" -> "等待回复"
         else -> when {
             turn.text.isNotEmpty() -> "正在生成"
             turn.hasProcess -> "正在执行"
@@ -90,10 +85,13 @@ internal fun exchangeDotPositions(progress: Float): List<Offset> {
 
 @Composable
 internal fun AgentMessageHeader(name: String, status: String?) {
+    val spokenStatus = status?.takeIf { it == "等待回复" || it == "正在思考" || it == "正在生成" }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-        Text(name, Modifier.weight(1f, fill = false), fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+        Text(name, Modifier.weight(1f, fill = false).then(
+            if (spokenStatus != null) Modifier.semantics { stateDescription = spokenStatus } else Modifier
+        ), fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
             maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface)
-        status?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (status != null && spokenStatus == null) Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -128,17 +126,67 @@ internal fun AgentPendingReply(name: String, stopping: Boolean) {
 
 @Composable
 internal fun ComposerSendButton(running: Boolean, stopping: Boolean, sendEnabled: Boolean, onSend: () -> Unit, onStop: () -> Unit,
-    sending: Boolean = false, emphasized: Boolean = false, voiceMode: Boolean = false, voiceEnabled: Boolean = true, onVoice: () -> Unit = {}) {
-    val stopAction = running || stopping
-    val enabled = !sending && !stopping && when { stopAction -> running; voiceMode -> voiceEnabled; else -> sendEnabled }
-    val label = when { sending -> "正在发送"; stopping -> "正在停止"; stopAction -> "停止生成"; voiceMode -> "语音输入"; else -> "发送任务" }
-    val icon = when { stopAction -> R.drawable.e_stop; voiceMode && !sending -> R.drawable.e_mic; emphasized -> R.drawable.e_send_active; else -> R.drawable.e_send }
-    IconButton(onClick = when { stopAction -> onStop; voiceMode -> onVoice; else -> onSend }, enabled = enabled,
-        modifier = Modifier.size(48.dp).testTag("composer-primary-action").semantics { contentDescription = label }) {
-        Box(Modifier.size(44.dp).background(Mint.copy(alpha = when { stopping -> .55f; enabled -> 1f; else -> .45f }), CircleShape), contentAlignment = Alignment.Center) {
-            Crossfade(icon, modifier = Modifier.size(24.dp), animationSpec = tween(180), label = "composerAction") { resource ->
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(painterResource(resource), null, Modifier.size(CatsCoMobileSpec.actionIconSize), tint = Color.White)
+    hasDraft: Boolean,
+    sending: Boolean = false, emphasized: Boolean = false, voiceMode: Boolean = false, voiceEnabled: Boolean = true, onVoice: () -> Unit = {},
+    voiceHold: VoiceHoldCallbacks? = null, stopEnabled: Boolean = true) {
+    val showStop = running || stopping
+    val primaryStop = showStop && !hasDraft && !sending
+    val canStop = running && !stopping && stopEnabled
+    val useVoice = voiceMode && !showStop && !sending
+    val enabled = when {
+        primaryStop -> canStop
+        sending || stopping -> false
+        useVoice -> voiceEnabled
+        else -> sendEnabled
+    }
+    val stopLabel = if (stopping) "正在停止" else "停止生成"
+    val label = when {
+        sending -> "正在发送"
+        primaryStop -> stopLabel
+        useVoice -> "语音输入"
+        showStop -> "发送补充消息"
+        else -> "发送任务"
+    }
+    val icon = when {
+        primaryStop -> R.drawable.e_stop
+        useVoice -> R.drawable.ic_composer_mic
+        emphasized -> R.drawable.e_send_active
+        else -> R.drawable.e_send
+    }
+    val hold = if (useVoice && enabled && voiceHold != null) Modifier.holdToTalk(voiceHold, onVoice) else Modifier
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (showStop && !primaryStop) {
+            val tint = MaterialTheme.colorScheme.onSurfaceVariant
+            CatsCoBoundedIconButton(
+                onClick = onStop, enabled = canStop,
+                visualSize = 36.dp,
+                modifier = Modifier.size(48.dp).testTag("composer-stop-action").semantics {
+                    contentDescription = stopLabel
+                },
+            ) {
+                Box(Modifier.size(36.dp).background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape),
+                    contentAlignment = Alignment.Center) {
+                    if (stopping) CircularProgressIndicator(Modifier.size(15.dp), color = tint, strokeWidth = 1.5.dp)
+                    else Icon(painterResource(R.drawable.e_stop), null, Modifier.size(18.dp), tint = tint)
+                }
+            }
+        }
+        CatsCoBoundedIconButton(
+            onClick = when { primaryStop -> onStop; useVoice -> onVoice; else -> onSend }, enabled = enabled,
+            visualSize = 44.dp, feedbackColor = Color.Black,
+            modifier = Modifier.size(48.dp).then(hold).testTag("composer-primary-action").semantics { contentDescription = label },
+        ) {
+            Box(Modifier.size(44.dp).background(Mint.copy(alpha = if (enabled || sending) 1f else .45f), CircleShape),
+                contentAlignment = Alignment.Center) {
+                val visual = if (sending || (primaryStop && stopping)) null else icon
+                Crossfade(visual, modifier = Modifier.size(24.dp), animationSpec = tween(150), label = "composerAction") { resource ->
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        if (resource == null) {
+                            CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                        } else {
+                            Icon(painterResource(resource), null, Modifier.size(CatsCoMobileSpec.actionIconSize), tint = Color.White)
+                        }
+                    }
                 }
             }
         }

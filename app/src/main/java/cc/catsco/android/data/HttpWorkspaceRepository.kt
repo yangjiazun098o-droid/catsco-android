@@ -86,10 +86,13 @@ class HttpWorkspaceRepository : WorkspaceRepository {
     override suspend fun resource(session: Session, path: String, query: Map<String, String>, method: String, body: String?): String =
         api(session.server, path, session.token, method, query, body?.let(::JSONObject)).toString()
 
-    override suspend fun upload(session: Session, bytes: ByteArray, name: String, mime: String): String {
+    override suspend fun upload(session: Session, bytes: ByteArray, name: String, mime: String): String =
+        upload(session, bytes, name, mime, if (mime.startsWith("image/")) "image" else "file")
+
+    suspend fun upload(session: Session, bytes: ByteArray, name: String, mime: String, type: String): String {
         require(bytes.isNotEmpty() && bytes.size <= 100 * 1024 * 1024) { "请选择 100 MB 以内的文件。" }
         val url = session.server.value.toHttpUrl().newBuilder().encodedPath("/api/upload")
-            .addQueryParameter("raw", "1").addQueryParameter("type", if (mime.startsWith("image/")) "image" else "file").build()
+            .addQueryParameter("raw", "1").addQueryParameter("type", type).build()
         val request = Request.Builder().url(url)
             .header("Authorization", "Bearer ${session.token}")
             .header("X-CatsCo-File-Name", encodeSegment(name))
@@ -141,7 +144,6 @@ class HttpWorkspaceRepository : WorkspaceRepository {
         val conversations = async { api(session.server, "/api/conversations", session.token).objects("conversations").map(::conversation) }
         val metadata = details.await().associateBy { it.first("id", "uid", "user_id") }
         val agents = roster.await().map { employee(it, metadata[it.first("id", "uid", "user_id")]) }
-        // Projects are not shown in the mobile drawer and must not block history.
         Workspace(agents.prioritizedForTasks(), conversations.await())
     }
 
@@ -197,8 +199,16 @@ fun JSONObject.objects(vararg keys: String): List<JSONObject> {
 }
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull(::optJSONObject)
 fun encodeSegment(text: String): String = java.net.URLEncoder.encode(text, Charsets.UTF_8.name()).replace("+", "%20")
-fun conversation(json: JSONObject): Conversation = Conversation(
-    json.first("id", "topic_id", "topic"), json.first("name").ifBlank { "新对话" }, json.optString("preview"),
-    json.optJSONObject("task_status")?.optString("state") in setOf("running", "queued", "working", "pending"), json.optString("last_time"),
-    json.optJSONArray("agent_ids")?.optString(0).orEmpty().ifBlank { if (json.optBoolean("is_bot")) json.first("friend_id") else "" }, json.optBoolean("is_agent_task"),
-)
+fun conversation(json: JSONObject): Conversation {
+    val id = json.first("id", "topic_id", "topic")
+    val bot = json.optBoolean("is_bot")
+    val taskStatus = json.optJSONObject("task_status")
+    return Conversation(
+        id, json.first("name").ifBlank { "新对话" }, json.optString("preview"),
+        taskStatus?.optString("state") in setOf("running", "waiting", "queued", "working", "pending"), json.optString("last_time"),
+        json.optJSONArray("agent_ids")?.optString(0).orEmpty().ifBlank { if (bot) json.first("friend_id") else "" },
+        json.optBoolean("is_agent_task") || bot || json.optBoolean("is_group") || id.startsWith("grp_"),
+        json.optLong("project_id").takeIf { it > 0 }?.toString().orEmpty(),
+        taskStatus?.let { conversationRunStatus(it, id) },
+    )
+}

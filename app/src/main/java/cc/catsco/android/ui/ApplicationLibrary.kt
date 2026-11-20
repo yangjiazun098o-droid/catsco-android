@@ -3,17 +3,14 @@ package cc.catsco.android.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
-import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,15 +24,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.catsco.android.R
@@ -44,13 +41,12 @@ import cc.catsco.android.WorkspaceState
 import cc.catsco.android.WorkspaceViewModel
 import cc.catsco.android.data.*
 import cc.catsco.core.Employee
-import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import kotlin.math.roundToInt
+import kotlin.math.abs
 
 @Composable
 internal fun CatsCoLibraryTabs(skills: Boolean, onSelect: (Boolean) -> Unit) {
@@ -59,7 +55,12 @@ internal fun CatsCoLibraryTabs(skills: Boolean, onSelect: (Boolean) -> Unit) {
 }
 
 @Composable
-internal fun ApplicationsScreen(state: WorkspaceState, model: WorkspaceViewModel) {
+internal fun ApplicationsScreen(
+    state: WorkspaceState,
+    model: WorkspaceViewModel,
+    outputAgent: String? = null,
+    sourceTopic: String? = null,
+) {
     val context = LocalContext.current
     val session = state.session ?: return
     val accountKey = "${session.server.value}/${session.userId}"
@@ -74,7 +75,7 @@ internal fun ApplicationsScreen(state: WorkspaceState, model: WorkspaceViewModel
         resource = state.resource,
         agents = state.workspace.employees,
         favorites = favorites,
-        initialAgent = state.page.takeIf { it.startsWith("agent-apps/") }?.removePrefix("agent-apps/").orEmpty(),
+        initialAgent = outputAgent ?: state.page.takeIf { it.startsWith("agent-apps/") }?.removePrefix("agent-apps/").orEmpty(),
         accountKey = accountKey,
         busy = state.busy,
         onRetry = { model.loadResource() },
@@ -95,6 +96,8 @@ internal fun ApplicationsScreen(state: WorkspaceState, model: WorkspaceViewModel
                 (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("应用分享链接", url))
             }
         },
+        outputContext = outputAgent != null,
+        sourceTopic = sourceTopic,
     )
 }
 
@@ -111,20 +114,24 @@ internal fun ApplicationsPanel(
     onOpen: (JSONObject) -> Unit,
     onBrowser: (JSONObject) -> Unit,
     onShare: (JSONObject) -> Unit,
+    outputContext: Boolean = false,
+    sourceTopic: String? = null,
 ) {
     var scope by rememberSaveable(accountKey) { mutableStateOf("all") }
     var selectedAgent by rememberSaveable(accountKey, initialAgent) { mutableStateOf(initialAgent) }
     var query by rememberSaveable(accountKey) { mutableStateOf("") }
     var menu by remember { mutableStateOf("") }
-    var revealed by remember { mutableStateOf("") }
-    val apps = resource.value.objects("apps")
+    val apps = remember(resource.value) { resource.value.objects("apps") }
     val selected = agents.find { it.id == selectedAgent }
-    val visible = apps.filter { app ->
-        (selectedAgent.isBlank() || app.first("source_agent_id", "agent", "agent_uid") == selectedAgent) &&
-            (scope != "favorites" || applicationKey(app) in favorites) &&
-            (scope != "manageable" || app.optBoolean("can_manage")) &&
-            (query.isBlank() || listOf(app.first("title", "name"), app.first("source_agent_name", "owner_name"),
-                app.first("description", "subtitle")).any { it.contains(query.trim(), ignoreCase = true) })
+    val visible = remember(apps, selectedAgent, scope, favorites, query) {
+        val search = query.trim()
+        apps.filter { app ->
+            (selectedAgent.isBlank() || app.first("source_agent_id", "agent", "agent_uid") == selectedAgent) &&
+                (scope != "favorites" || applicationKey(app) in favorites) &&
+                (scope != "manageable" || app.optBoolean("can_manage")) &&
+                (search.isEmpty() || listOf(app.first("title", "name"), app.first("source_agent_name", "owner_name"),
+                    app.first("description", "subtitle")).any { it.contains(search, ignoreCase = true) })
+        }
     }
     val failed = resource.value.optJSONArray("failed_agents")
     val failedIds = (0 until (failed?.length() ?: 0)).map { failed!!.optString(it) }
@@ -135,26 +142,46 @@ internal fun ApplicationsPanel(
         else -> ""
     }
     val backdrop = rememberHazeState()
+    val taskApps = remember(visible, sourceTopic) {
+        if (sourceTopic == null) emptyList() else visible.filter {
+            it.first("source_topic_id", "sourceTopicId") == sourceTopic
+        }
+    }
+    val ordered = remember(visible, taskApps) { taskApps + visible.filterNot { it in taskApps } }
     val list = rememberLazyListState()
-    LaunchedEffect(scope, selectedAgent, query) { list.scrollToItem(0); revealed = ""; menu = "" }
+    val filters = Triple(scope, selectedAgent, query)
+    var lastFilters by remember { mutableStateOf(filters) }
+    LaunchedEffect(filters) {
+        if (filters != lastFilters) {
+            lastFilters = filters
+            list.scrollToItem(0)
+            menu = ""
+        }
+    }
     LaunchedEffect(agents) {
         if (initialAgent.isBlank() && selectedAgent.isNotBlank() && selected == null) selectedAgent = ""
     }
-    LaunchedEffect(list.isScrollInProgress) { if (list.isScrollInProgress) { revealed = ""; menu = "" } }
+    LaunchedEffect(list.isScrollInProgress) { if (list.isScrollInProgress) menu = "" }
     Column(Modifier.fillMaxSize().imePadding()) {
-        LibraryEmployeeSelector(selected?.name ?: "全部员工", listOf("" to "全部员工") + agents.map { it.id to it.name },
-            selectedAgent, { selectedAgent = it }, "application-agent")
-        CatsCoSidebarSearchField(query, { query = it }, backdrop,
+        if (!outputContext || apps.size >= 8 || query.isNotBlank()) CatsCoSidebarSearchField(query, { query = it }, backdrop,
             Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("application-search"), "搜索应用", glass = false)
-        CatsCoSegmentedControl(listOf("all" to "全部应用", "favorites" to "收藏", "manageable" to "可管理"), scope,
-            { scope = it }, Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("application-scope"), "application-filter")
+        if (!outputContext) LibraryToolbar(
+            section = "application",
+            employeeName = selected?.name ?: "全部员工",
+            employees = listOf("" to "全部员工") + agents.map { it.id to it.name },
+            selectedEmployee = selectedAgent,
+            onEmployeeSelected = { selectedAgent = it },
+            scopes = listOf("all" to "全部", "favorites" to "收藏", "manageable" to "可管理"),
+            scope = scope,
+            onScopeSelected = { scope = it },
+        )
         if (failure.isNotBlank()) Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Text(failure, Modifier.weight(1f), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             CatsCoSecondaryButton(onClick = onRetry, enabled = !resource.loading) { Text("重试", fontSize = 13.sp) }
         }
         Box(Modifier.weight(1f)) {
-            LazyColumn(Modifier.fillMaxSize().hazeSource(backdrop).testTag("application-list"), state = list,
+            LazyColumn(Modifier.fillMaxSize().testTag("application-list"), state = list,
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)) {
                 if (resource.loading && apps.isEmpty()) item { ModuleLoading() }
                 if (visible.isEmpty() && !resource.loading && failure.isBlank()) item {
@@ -162,15 +189,24 @@ internal fun ApplicationsPanel(
                         query.isNotBlank() -> "没有找到匹配的应用"
                         scope == "favorites" -> "还没有收藏的应用"
                         scope == "manageable" -> "没有可管理的应用"
+                        outputContext && initialAgent.isBlank() -> if (sourceTopic == null) "暂无可查看的 Agent" else "当前任务没有关联的 Agent"
                         else -> "还没有分享的应用"
-                    }, if (query.isNotBlank()) "换一个关键词，或清除搜索后查看全部。" else "Agent 分享的应用会显示在这里。")
+                    }, when {
+                        query.isNotBlank() -> "换一个关键词，或清除搜索后查看全部。"
+                        outputContext && initialAgent.isBlank() -> ""
+                        else -> "Agent 分享的应用会显示在这里。"
+                    })
                 }
-                items(visible, key = ::applicationKey) { app ->
+                itemsIndexed(ordered, key = { _, app -> applicationKey(app) }) { index, app ->
+                    if (taskApps.isNotEmpty() && (index == 0 || index == taskApps.size)) {
+                        Text(if (index == 0) "本任务产出" else "该 Agent 的其他应用",
+                            Modifier.padding(start = 4.dp, top = if (index == 0) 4.dp else 14.dp, bottom = 2.dp),
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     val key = applicationKey(app)
-                    ApplicationRow(app, key in favorites, revealed == key, menu == key, busy,
-                        onReveal = { revealed = if (it) key else "" },
-                        onMenu = { menu = key; revealed = "" }, onDismiss = { menu = "" },
-                        onFavorite = { onFavorite(app); revealed = ""; menu = "" },
+                    ApplicationRow(app, key in favorites, menu == key, busy,
+                        onMenu = { menu = key }, onDismiss = { menu = "" },
+                        onFavorite = { onFavorite(app); menu = "" },
                         onOpen = { menu = ""; onOpen(app) }, onShare = { menu = ""; onShare(app) },
                         onBrowser = { menu = ""; onBrowser(app) })
                 }
@@ -180,14 +216,56 @@ internal fun ApplicationsPanel(
 }
 
 @Composable
-internal fun LibraryEmployeeSelector(label: String, options: List<Pair<String, String>>, selected: String,
-    onSelect: (String) -> Unit, testTag: String) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("$testTag-row"),
-        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text("当前员工", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(12.dp))
-        Box(Modifier.widthIn(max = 184.dp).weight(1f, fill = false)) {
-            ApplicationFilter(label, R.drawable.e_people, testTag, options, selected, onSelect)
+internal fun LibraryToolbar(
+    section: String,
+    employeeName: String,
+    employees: List<Pair<String, String>>,
+    selectedEmployee: String,
+    onEmployeeSelected: (String) -> Unit,
+    scopes: List<Pair<String, String>>,
+    scope: String,
+    onScopeSelected: (String) -> Unit,
+    unavailableScope: String? = null,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("$section-agent-row")) {
+        val employee: @Composable () -> Unit = {
+            LibraryEmployeeMenu(employeeName, employees, selectedEmployee, onEmployeeSelected, "$section-agent")
+        }
+        val filters: @Composable () -> Unit = {
+            Row(Modifier.selectableGroup().testTag("$section-scope").padding(end = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                for ((key, label) in scopes) {
+                    val selected = scope == key
+                    val enabled = key != unavailableScope
+                    Box(
+                        Modifier.heightIn(min = 48.dp).selectable(selected, enabled = enabled, role = Role.Tab,
+                            onClick = { onScopeSelected(key) }).testTag("$section-filter-$key").padding(horizontal = 10.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val colors = MaterialTheme.colorScheme
+                        Text(label, fontSize = 14.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = when {
+                                selected -> colors.onSurface
+                                enabled -> colors.onSurfaceVariant
+                                else -> colors.onSurfaceVariant.copy(alpha = .5f)
+                            })
+                        if (selected) Box(Modifier.align(Alignment.BottomCenter).offset(y = 4.dp).width(16.dp).height(2.dp)
+                            .background(colors.onSurface, RoundedCornerShape(1.dp)))
+                    }
+                }
+            }
+        }
+        val minimumInlineWidth = (228 + scopes.size * 16).dp * LocalDensity.current.fontScale
+        if (maxWidth < minimumInlineWidth) {
+            Column {
+                employee()
+                filters()
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.weight(1f)) { employee() }
+                filters()
+            }
         }
     }
 }
@@ -204,16 +282,22 @@ internal fun LibraryItemText(title: String, detail: String, modifier: Modifier =
 }
 
 @Composable
-private fun ApplicationFilter(label: String, icon: Int, testTag: String, options: List<Pair<String, String>>,
-    selected: String, onSelect: (String) -> Unit) {
+internal fun LibraryEmployeeMenu(label: String, options: List<Pair<String, String>>, selected: String,
+    onSelect: (String) -> Unit, testTag: String) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .65f)) {
-            Row(Modifier.heightIn(min = 48.dp).clickable(enabled = options.isNotEmpty()) { expanded = true }.testTag(testTag).padding(horizontal = 14.dp),
+        val colors = MaterialTheme.colorScheme
+        Surface(shape = RoundedCornerShape(24.dp), color = Color.Transparent) {
+            Row(Modifier.heightIn(min = 48.dp)
+                .catsCoDisclosureClickable(expanded, enabled = options.isNotEmpty()) { expanded = true }
+                .testTag(testTag)
+                .padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(painterResource(icon), null, Modifier.size(CatsCoMobileSpec.actionIconSize), tint = MaterialTheme.colorScheme.onSurface)
-                Text(label, Modifier.weight(1f, fill = false), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Icon(painterResource(R.drawable.e_expand), null, Modifier.size(CatsCoMobileSpec.actionIconSize), tint = MaterialTheme.colorScheme.onSurface)
+                Icon(painterResource(R.drawable.e_people), "当前员工",
+                    Modifier.size(CatsCoMobileSpec.actionIconSize), tint = colors.onSurfaceVariant)
+                Text(label, Modifier.weight(1f, fill = false), fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                CatsCoDisclosureChevron(expanded, size = 16.dp, tint = colors.onSurfaceVariant)
             }
         }
         CatsCoMenuPopup(expanded, { expanded = false }, testTag = "$testTag-menu", width = 208.dp) {
@@ -231,72 +315,50 @@ private fun ApplicationFilter(label: String, icon: Int, testTag: String, options
 }
 
 @Composable
-private fun ApplicationRow(app: JSONObject, favorite: Boolean, revealed: Boolean, menu: Boolean, busy: Boolean,
-    onReveal: (Boolean) -> Unit, onMenu: () -> Unit, onDismiss: () -> Unit, onFavorite: () -> Unit,
+private fun ApplicationRow(app: JSONObject, favorite: Boolean, menu: Boolean, busy: Boolean,
+    onMenu: () -> Unit, onDismiss: () -> Unit, onFavorite: () -> Unit,
     onOpen: () -> Unit, onShare: () -> Unit, onBrowser: () -> Unit) {
     val title = app.first("title", "name").ifBlank { "未命名应用" }
     val date = applicationTimestamp(app).takeIf { it > 0 }?.let {
         DateTimeFormatter.ofPattern("MM/dd").format(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()))
     }
     val detail = listOfNotNull(app.first("source_agent_name", "owner_name").takeIf(String::isNotBlank), date?.let { "更新于 $it" }).joinToString(" · ")
-    val density = LocalDensity.current
-    val distance = with(density) { 76.dp.toPx() }
-    val edge = with(density) { 24.dp.toPx() }
-    var dragging by remember { mutableStateOf(false) }
-    var drag by remember { mutableFloatStateOf(0f) }
-    val settled by animateFloatAsState(if (revealed) distance else 0f, spring(dampingRatio = 1f, stiffness = 550f), label = "applicationSwipe")
-    val revealCallback by rememberUpdatedState(onReveal)
+    val horizontalDrag = remember { mutableStateOf(false) }
     Column {
-        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).testTag("application-row-${app.first("id")}")) {
-            if (revealed || dragging || settled > 1f) CatsCoSecondaryButton(onClick = onFavorite,
-                modifier = Modifier.align(Alignment.CenterStart).size(68.dp).testTag("application-swipe-favorite")) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Icon(painterResource(R.drawable.e_star), null, Modifier.size(CatsCoMobileSpec.actionIconSize), tint = Mint)
-                    Text(if (favorite) "取消收藏" else "收藏", fontSize = 12.sp)
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).testTag("application-row-${app.first("id")}")
+            .heightIn(min = 76.dp)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    try {
+                        do {
+                            // Observe the drag without intercepting the drawer or scrolling.
+                            val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id }
+                                ?: break
+                            val displacement = change.position - down.position
+                            if (abs(displacement.x) > viewConfiguration.touchSlop && abs(displacement.x) > abs(displacement.y)) {
+                                horizontalDrag.value = true
+                            }
+                        } while (change.pressed)
+                        awaitPointerEvent(PointerEventPass.Final)
+                    } finally {
+                        horizontalDrag.value = false
+                    }
                 }
             }
-            Row(Modifier.offset { IntOffset((if (dragging) drag else settled).roundToInt(), 0) }
-                .fillMaxWidth().background(MaterialTheme.colorScheme.background)
-                .pointerInput(revealed, distance) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        // Reserve 40dp (16dp list inset + 24dp here) for the drawer,
-                        // including space beyond Android's system back-gesture strip.
-                        if (down.position.x < edge) return@awaitEachGesture
-                        val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, over ->
-                            change.consume()
-                            dragging = true
-                            drag = ((if (revealed) distance else 0f) + over).coerceIn(0f, distance)
-                        }
-                        if (start != null) {
-                            val finished = horizontalDrag(start.id) { change ->
-                                drag = (drag + change.positionChange().x).coerceIn(0f, distance)
-                                change.consume()
-                            }
-                            revealCallback(if (finished) drag > distance * .4f else revealed)
-                            dragging = false
-                        }
-                    }
+            .clickable(enabled = !busy) { if (!horizontalDrag.value) onOpen() }
+            .padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            LibraryItemText(title, detail, Modifier.weight(1f).padding(vertical = 14.dp))
+            Box {
+                CatsCoBoundedIconButton(onClick = onMenu, modifier = Modifier.size(48.dp).testTag("application-more-${app.first("id")}")) {
+                    Icon(painterResource(R.drawable.e_more), "$title 的更多操作", Modifier.size(CatsCoMobileSpec.actionIconSize), tint = MaterialTheme.colorScheme.onSurface)
                 }
-                .heightIn(min = 76.dp).clickable(enabled = !busy) { if (revealed) onReveal(false) else onOpen() }
-                .padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                LibraryItemText(title, detail, Modifier.weight(1f).padding(vertical = 14.dp))
-                Box {
-                    IconButton(onClick = onMenu, modifier = Modifier.size(48.dp).testTag("application-more-${app.first("id")}")) {
-                        Icon(painterResource(R.drawable.e_more), "$title 的更多操作", Modifier.size(CatsCoMobileSpec.actionIconSize), tint = MaterialTheme.colorScheme.onSurface)
-                    }
-                    CatsCoMenuPopup(menu, onDismiss, testTag = "application-action-menu", width = 208.dp) {
-                        listOf(Triple("打开", R.drawable.e_apps, onOpen),
-                            Triple(if (favorite) "取消收藏" else "收藏", R.drawable.e_star, onFavorite),
-                            Triple("复制分享链接", R.drawable.message_copy, onShare),
-                            Triple("在浏览器中打开", R.drawable.e_external, onBrowser)).forEachIndexed { index, (label, icon, action) ->
-                            DropdownMenuItem(text = { Text(label, style = CatsCoMobileSpec.menuLabelStyle) },
-                                contentPadding = CatsCoMobileSpec.menuContentPadding,
-                                leadingIcon = { Icon(painterResource(icon), null, Modifier.size(CatsCoMobileSpec.menuIconSize),
-                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = if (index != 0 || !busy) 1f else .38f)) },
-                                modifier = Modifier.height(CatsCoMobileSpec.menuItemHeight).clip(CatsCoMobileSpec.radiusSmall), enabled = index != 0 || !busy,
-                                onClick = action)
-                        }
+                CatsCoMenuPopup(menu, onDismiss, testTag = "application-action-menu", width = 208.dp) {
+                    listOf(Triple("打开", R.drawable.e_apps, onOpen),
+                        Triple(if (favorite) "取消收藏" else "收藏", R.drawable.e_star, onFavorite),
+                        Triple("复制分享链接", R.drawable.message_copy, onShare),
+                        Triple("在浏览器中打开", R.drawable.e_external, onBrowser)).forEachIndexed { index, (label, icon, action) ->
+                        CatsCoMenuActionItem(label, icon, enabled = index != 0 || !busy, onClick = action)
                     }
                 }
             }

@@ -2,11 +2,15 @@ package cc.catsco.android
 
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
@@ -22,8 +26,14 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cc.catsco.android.data.MessageTurn
+import cc.catsco.android.data.VoiceCapture
+import cc.catsco.android.data.VoiceCharacterLimit
+import cc.catsco.android.data.VoiceDestination
+import cc.catsco.android.data.takeVoiceCharacters
 import cc.catsco.android.ui.*
 import cc.catsco.core.Employee
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -50,6 +60,31 @@ class FinishingInteractionTest {
     private fun isolatedModel(): WorkspaceViewModel =
         ViewModelProvider(host, ViewModelProvider.AndroidViewModelFactory(testApplication))[WorkspaceViewModel::class.java]
 
+    private fun swipeOpenHomeSidebar() {
+        compose.onNodeWithTag("swipe-back-page").performTouchInput {
+            swipe(Offset(width * .03f, height * .48f), Offset(width * .72f, height * .48f))
+        }
+    }
+
+    @Test fun sidebarHeaderShowsWordmarkAndClosesOverTheCurrentPage() {
+        lateinit var model: WorkspaceViewModel
+        show {
+            model = remember { isolatedModel() }
+            val state by model.state.collectAsState()
+            CatsCoApp(state.copy(
+                session = cc.catsco.core.Session(cc.catsco.core.ServerAddress.parse("https://example.test"), "test-only", "test", "Test"),
+                resource = ResourceState(loaded = true),
+            ), model)
+        }
+        compose.runOnIdle { model.navigate("chat/recent-task") }
+        compose.onNodeWithContentDescription("打开侧栏").performClick()
+        compose.onNodeWithContentDescription("CatsCo").assertIsDisplayed()
+        compose.onNodeWithContentDescription("返回任务").assertDoesNotExist()
+        compose.onNodeWithContentDescription("关闭侧栏").performClick()
+        compose.onNodeWithContentDescription("打开侧栏").assertIsDisplayed()
+        compose.runOnIdle { assertEquals("chat/recent-task", model.state.value.page) }
+    }
+
     @Test fun shortDrawerCanScrollNavigationAwayAndOpenTaskActions() {
         val title = "横屏侧栏任务"
         show {
@@ -61,12 +96,19 @@ class FinishingInteractionTest {
                 ), model)
             }
         }
-        compose.onNodeWithContentDescription("打开侧栏").performClick()
+        compose.onNodeWithContentDescription("打开侧栏").assertIsDisplayed().performClick()
         compose.onNodeWithTag("sidebar-history").performScrollToNode(hasText(title))
         compose.onNodeWithText(title).assertIsDisplayed().performTouchInput { longClick() }
         listOf("重命名", "置顶", "多选", "删除").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
         compose.onNodeWithText("重命名").performClick()
-        compose.onNodeWithText("重命名会话").assertIsDisplayed()
+        val dialogTitle = compose.onNodeWithText("重命名会话").assertIsDisplayed()
+        val input = compose.onNode(hasSetTextAction() and hasText(title)).assertIsDisplayed()
+        val save = compose.onNodeWithText("保存").assertIsNotEnabled()
+        val inputBounds = input.fetchSemanticsNode().boundsInRoot
+        assertEquals(dialogTitle.fetchSemanticsNode().boundsInRoot.left, inputBounds.left, 1f)
+        assertEquals(save.fetchSemanticsNode().boundsInRoot.right, inputBounds.right, 1f)
+        input.performTextReplacement("修改后的任务名称")
+        save.assertIsEnabled()
         compose.onNodeWithText("取消").performClick()
         compose.onNodeWithContentDescription("关闭侧栏").performClick()
         compose.onNodeWithContentDescription("打开侧栏").assertIsDisplayed()
@@ -133,10 +175,79 @@ class FinishingInteractionTest {
         val composer = compose.onNode(hasSetTextAction() and hasText(draft))
         composer.performTouchInput { click() }
         composer.assertIsFocused()
-        compose.onNodeWithContentDescription("打开侧栏").performClick()
+        swipeOpenHomeSidebar()
         compose.onNodeWithText("账户与设置").assertIsDisplayed()
         compose.onNodeWithContentDescription("关闭侧栏").performClick()
         composer.assertIsDisplayed().assertIsNotFocused()
+    }
+
+    @Test fun blankTapDismissesComposerKeyboardAndKeepsTheDraftReadyToEdit() {
+        val draft = "点空白处收起键盘"
+        show {
+            val model = remember { isolatedModel() }
+            val session = cc.catsco.core.Session(cc.catsco.core.ServerAddress.parse("https://example.test"), "test-only", "test", "Test")
+            CatsCoApp(WorkspaceState(session = session, draft = draft), model)
+        }
+        fun keyboardVisible(): Boolean {
+            var visible = false
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                visible = ViewCompat.getRootWindowInsets(host.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            }
+            return visible
+        }
+        val composer = compose.onNode(hasSetTextAction() and hasText(draft))
+        val greeting = compose.onNodeWithText("需要为您做什么，Test？")
+        val greetingBounds = greeting.fetchSemanticsNode().boundsInRoot
+        composer.performTouchInput { click() }
+        compose.waitUntil(5000) { keyboardVisible() }
+        assertEquals(greetingBounds, greeting.fetchSemanticsNode().boundsInRoot)
+        val page = compose.onNodeWithTag("swipe-back-page")
+        val inputTop = composer.fetchSemanticsNode().boundsInRoot.top - page.fetchSemanticsNode().boundsInRoot.top
+        val gap = with(compose.density) { 54.dp.toPx() }
+        page.performTouchInput {
+            val blank = Offset(width * .15f, inputTop - gap)
+            swipe(blank, Offset(blank.x, blank.y - gap), durationMillis = 250)
+        }
+        assertTrue(keyboardVisible())
+        page.performTouchInput { click(Offset(width * .15f, inputTop - gap)) }
+        compose.waitUntil(5000) { !keyboardVisible() }
+        composer.assertIsDisplayed().assertIsFocused()
+
+        composer.performTouchInput { click() }
+        compose.waitUntil(5000) { keyboardVisible() }
+        assertEquals(greetingBounds, greeting.fetchSemanticsNode().boundsInRoot)
+        compose.onNodeWithContentDescription("添加附件").performTouchInput { click() }
+        compose.waitUntil(5000) { !keyboardVisible() && compose.onNodeWithText("文件").isDisplayed() }
+        compose.onNodeWithText("文件").assertIsDisplayed()
+        assertFalse(keyboardVisible())
+        assertEquals(greetingBounds, greeting.fetchSemanticsNode().boundsInRoot)
+        composer.performTouchInput { click() }
+        compose.waitUntil(5000) { keyboardVisible() && !compose.onNodeWithText("文件").isDisplayed() }
+        compose.onNodeWithText("文件").assertDoesNotExist()
+        composer.assertIsFocused()
+        assertTrue(keyboardVisible())
+    }
+
+    @OptIn(ExperimentalLayoutApi::class)
+    @Test fun composerInsetsFollowKeyboardAnimationAndReserveTheSharedAreaDuringResize() {
+        val current = MutableWindowInsets(WindowInsets(bottom = 220))
+        val source = MutableWindowInsets(WindowInsets(bottom = 0))
+        val target = MutableWindowInsets(WindowInsets(bottom = 420))
+        val insets = ComposerImeInsets(current, source, target)
+        val density = androidx.compose.ui.unit.Density(1f)
+        assertEquals(220, insets.getBottom(density))
+
+        current.insets = WindowInsets(bottom = 380)
+        source.insets = WindowInsets(bottom = 420)
+        target.insets = WindowInsets(bottom = 510)
+        assertEquals(420, insets.getBottom(density))
+
+        source.insets = WindowInsets(bottom = 510)
+        target.insets = WindowInsets(bottom = 0)
+        current.insets = WindowInsets(bottom = 220)
+        assertEquals(220, insets.getBottom(density))
+        current.insets = WindowInsets(bottom = 0)
+        assertEquals(0, insets.getBottom(density))
     }
 
     @Test fun employeeManagementShowsCollaboratorsAndKeepsInviteInItsDialog() {
@@ -184,7 +295,8 @@ class FinishingInteractionTest {
             val model = remember { isolatedModel() }
             NativeSettings(WorkspaceState(), model.accountImages) { opened = it }
         }
-        compose.onNodeWithText("外观").performScrollTo().performClick()
+        compose.onNodeWithText("外观").performScrollTo()
+        compose.onNodeWithText("跟随系统", useUnmergedTree = true).performTouchInput { click() }
         compose.onNodeWithText("浅色").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals("appearance/light", opened) }
         compose.onNodeWithText("浅色").assertDoesNotExist()
@@ -197,8 +309,159 @@ class FinishingInteractionTest {
         }
         compose.onNodeWithText("63%").assertIsDisplayed()
         compose.onNodeWithText("已用额度").assertDoesNotExist()
-        compose.onNodeWithText("模型服务详情").performClick()
+        val disclosure = compose.onNodeWithText("模型服务详情")
+        fun assertArrowPoints(expanded: Boolean) {
+            val pixels = disclosure.captureToImage().toPixelMap()
+            val iconSize = with(compose.density) { 23.dp.roundToPx() }
+            val centerY = pixels.height / 2
+            val background = pixels[pixels.width / 2, centerY]
+            val points = buildList {
+                for (x in pixels.width - iconSize until pixels.width) {
+                    for (y in centerY - iconSize / 2 until centerY + iconSize / 2) {
+                        val color = pixels[x, y]
+                        if (kotlin.math.abs(color.red - background.red) > .32f) add(x to y)
+                    }
+                }
+            }
+            assertTrue(points.isNotEmpty())
+            val tips = if (expanded) points.map { it.second } else points.map { it.first }
+            val cross = if (expanded) points.map { it.first } else points.map { it.second }
+            val first = tips.min()
+            val last = tips.max()
+            val span = (last - first) / 3
+            val base = cross.filterIndexed { index, _ -> tips[index] <= first + span }
+            val tip = cross.filterIndexed { index, _ -> tips[index] >= last - span }
+            assertTrue((base.max() - base.min()) > (tip.max() - tip.min()))
+        }
+        fun rowBackground(): Color {
+            val pixels = disclosure.captureToImage().toPixelMap()
+            return pixels[pixels.width / 2, pixels.height / 2]
+        }
+        assertArrowPoints(expanded = false)
+        val idleColor = rowBackground()
+        disclosure.performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(300L)
+        assertEquals(idleColor, rowBackground())
+        disclosure.performTouchInput { up() }
         compose.onNodeWithText("服务来源").assertIsDisplayed()
+        assertArrowPoints(expanded = true)
+        assertEquals(idleColor, rowBackground())
+        disclosure.performClick()
+        compose.onNodeWithText("服务来源").assertDoesNotExist()
+    }
+
+    @Test fun computerConnectionOptionsExpandInPlace() {
+        show {
+            val model = remember { isolatedModel() }
+            WorkspaceModuleScreen(WorkspaceState(page = "devices", resource = ResourceState(loaded = true)), model)
+        }
+        val heading = compose.onNodeWithText("电脑连接")
+        val connection = compose.onNodeWithText("连接电脑")
+        val audit = compose.onNodeWithText("连接记录")
+        val cloud = compose.onNodeWithText("云托管")
+        val generate = compose.onNodeWithText("生成连接码")
+        generate.assertDoesNotExist()
+        connection.performClick()
+        heading.assertIsDisplayed()
+        generate.assertIsDisplayed()
+        connection.performClick()
+        generate.assertDoesNotExist()
+        audit.performClick()
+        audit.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "已展开"))
+        cloud.performClick()
+        audit.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "已收起"))
+        cloud.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "已展开"))
+        heading.assertIsDisplayed()
+    }
+
+    @Test fun projectSheetExpandsAndPinnedFiltersToggleTheDrawerHistory() {
+        val extraProjects = (3..7).map { cc.catsco.core.Project(it.toString(), "移动端设计项目 $it") }
+        show {
+            val model = remember { isolatedModel() }
+            val session = remember {
+                cc.catsco.core.Session(cc.catsco.core.ServerAddress.parse("https://example.test"),
+                    "test-only", java.util.UUID.randomUUID().toString(), "Test")
+            }
+            CatsCoApp(WorkspaceState(session = session, workspace = cc.catsco.core.Workspace(
+                projects = listOf(cc.catsco.core.Project("1", "安卓项目"), cc.catsco.core.Project("2", "产品研究")) + extraProjects,
+                conversations = listOf(
+                    cc.catsco.core.Conversation("grp_10", "项目里的任务", task = true, projectId = "1"),
+                    cc.catsco.core.Conversation("grp_11", "未归档的任务", task = true),
+                    cc.catsco.core.Conversation("usr_12", "普通会话", projectId = "1"),
+                ),
+            )), model)
+        }
+        compose.onNodeWithContentDescription("打开侧栏").performClick()
+        val projectButton = compose.onNodeWithContentDescription("项目").assertIsDisplayed()
+        val closeButton = compose.onNodeWithContentDescription("关闭侧栏").assertIsDisplayed()
+        val projectBounds = projectButton.fetchSemanticsNode().boundsInRoot
+        val closeBounds = closeButton.fetchSemanticsNode().boundsInRoot
+        assertEquals(closeBounds.center.y, projectBounds.center.y, .5f)
+        assertEquals(with(compose.density) { 40.dp.toPx() }, closeBounds.center.x - projectBounds.center.x, 1f)
+        projectButton.performClick()
+        val projectTitle = compose.onNodeWithText("项目")
+        val addProject = compose.onNodeWithContentDescription("新建项目")
+        val projectSorting = compose.onNodeWithText("按最近任务排列")
+        fun expandProjects() {
+            if (!projectSorting.isDisplayed()) projectTitle.performTouchInput {
+                swipe(center, center - Offset(0f, height * 9f), durationMillis = 350)
+            }
+            projectSorting.assertIsDisplayed()
+        }
+        fun dismissProjects() {
+            repeat(2) {
+                if (!addProject.isDisplayed()) return
+                InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("input keyevent 4")
+                    .use { descriptor -> FileInputStream(descriptor.fileDescriptor).use { it.readBytes() } }
+                compose.waitForIdle()
+            }
+            addProject.assertDoesNotExist()
+        }
+        compose.onNodeWithText("查看全部").assertDoesNotExist()
+        compose.onNodeWithContentDescription("关闭项目").assertDoesNotExist()
+        addProject.assertIsDisplayed().performClick()
+        compose.onNodeWithText("项目名称").assertIsDisplayed()
+        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithContentDescription("置顶 安卓项目").performClick()
+        expandProjects()
+        dismissProjects()
+        val filter = compose.onNode(hasText("安卓项目") and isSelectable())
+        val label = compose.onNode(hasText("安卓项目") and hasAnyAncestor(isSelectable()), useUnmergedTree = true)
+        val filterBounds = filter.fetchSemanticsNode().boundsInRoot
+        val labelBounds = label.fetchSemanticsNode().boundsInRoot
+        assertEquals(filterBounds.center.x, labelBounds.center.x, 1f)
+        assertEquals(filterBounds.center.y, labelBounds.center.y, 1f)
+        assertEquals(with(compose.density) { 18.dp.toPx() }, filterBounds.width - labelBounds.width, 2f)
+        filter.assertIsDisplayed().assertIsNotSelected().performTouchInput { click() }
+        filter.assertIsSelected()
+        compose.onNodeWithText("项目里的任务").assertIsDisplayed()
+        compose.onAllNodesWithText("安卓项目").assertCountEquals(1)
+        compose.onNodeWithText("未归档的任务").assertDoesNotExist()
+        compose.onNodeWithText("普通会话").assertDoesNotExist()
+        filter.performTouchInput { click() }
+        compose.onNodeWithText("未归档的任务").assertIsDisplayed()
+
+        projectButton.performClick()
+        expandProjects()
+        extraProjects.forEach { project ->
+            compose.onNodeWithContentDescription("置顶 ${project.name}").performClick()
+            compose.onNodeWithContentDescription("取消置顶 ${project.name}").assertExists()
+        }
+        dismissProjects()
+        val strip = compose.onNodeWithTag("sidebar-project-filters")
+        val searchIcon = compose.onNodeWithContentDescription("搜索", useUnmergedTree = true)
+        val searchBounds = searchIcon.fetchSemanticsNode().boundsInRoot
+        val stripBounds = strip.fetchSemanticsNode().boundsInRoot
+        val searchIconInset = with(compose.density) { CatsCoMobileSpec.sidebarContentInset.toPx() }
+        assertEquals(stripBounds.left, searchBounds.left - searchIconInset, 2f)
+        assertEquals(stripBounds.left, filter.fetchSemanticsNode().boundsInRoot.left, 1f)
+        repeat(3) { strip.performTouchInput { swipeLeft() } }
+        compose.onNodeWithText(extraProjects.last().name).assertIsDisplayed()
+        closeButton.assertIsDisplayed()
+        compose.onNodeWithTag("sidebar-history").performTouchInput {
+            swipe(Offset(width * .9f, height * .65f), Offset(width * .08f, height * .65f), durationMillis = 230)
+        }
+        closeButton.assertIsNotDisplayed()
     }
 
     @Test fun settingsAccountAndCloudHostingKeepTheirNavigationActions() {
@@ -310,13 +573,27 @@ class FinishingInteractionTest {
             density = LocalDensity.current.density
             model = remember { isolatedModel() }
             val state by model.state.collectAsState()
-            CatsCoApp(state.copy(
-                session = cc.catsco.core.Session(cc.catsco.core.ServerAddress.parse("https://example.test"), "test-only", "test", "Test"),
-                resource = ResourceState(loaded = true),
-            ), model)
+            val context = androidx.compose.ui.platform.LocalContext.current
+            // This pixel check samples the default background rather than the device's saved wallpaper.
+            val fixtureContext = remember(context) {
+                object : android.content.ContextWrapper(context) {
+                    private val localFiles = java.io.File(context.cacheDir, "swipe-preview-${java.util.UUID.randomUUID()}")
+                    override fun getApplicationContext(): android.content.Context = this
+                    override fun getNoBackupFilesDir(): java.io.File = localFiles
+                }
+            }
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalContext provides fixtureContext) {
+                CatsCoApp(state.copy(
+                    session = cc.catsco.core.Session(cc.catsco.core.ServerAddress.parse("https://example.test"), "test-only", "test", "Test"),
+                    resource = ResourceState(loaded = true),
+                ), model)
+            }
         }
+        val greeting = compose.onNodeWithText("需要为您做什么，Test？")
+        val before = greeting.fetchSemanticsNode().boundsInRoot
         compose.onNodeWithContentDescription("添加附件").performClick()
         compose.onNodeWithText("拍照").assertIsDisplayed()
+        assertEquals(before, greeting.fetchSemanticsNode().boundsInRoot)
         val photoLabel = compose.onNodeWithText("照片", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         compose.waitForIdle()
         Thread.sleep(200)
@@ -344,9 +621,7 @@ class FinishingInteractionTest {
             else assertTrue("Collapsed preview must remove the photo pictogram: $color",
                 color.red > .85f && color.green > .85f && color.blue > .85f)
         }
-        val greeting = compose.onNodeWithText("需要为您做什么，Test？")
-        val before = greeting.fetchSemanticsNode().boundsInRoot
-        compose.onNodeWithContentDescription("打开侧栏").performClick()
+        swipeOpenHomeSidebar()
         compose.onNodeWithContentDescription("打开设置").performClick()
         compose.runOnIdle { assertEquals("settings", model.state.value.page) }
         compose.onRoot().performTouchInput {
@@ -361,9 +636,10 @@ class FinishingInteractionTest {
         assertEquals(before, greeting.fetchSemanticsNode().boundsInRoot)
         // A deliberate collapse must also survive the next return.
         compose.onNodeWithContentDescription("收起附件").performClick()
+        assertEquals(before, greeting.fetchSemanticsNode().boundsInRoot)
         compose.waitForIdle()
         Thread.sleep(200) // PixelCopy completion uses the real window clock.
-        compose.onNodeWithContentDescription("打开侧栏").performClick()
+        swipeOpenHomeSidebar()
         compose.onNodeWithContentDescription("打开设置").performClick()
         compose.onRoot().performTouchInput {
             down(Offset(width * .12f, height * .6f))
@@ -504,6 +780,10 @@ class FinishingInteractionTest {
                 Composer(state.copy(employeeId = "9", attachments = attachments), model, {}, { voices++ }, { sends++ })
             }
         }
+        compose.onNodeWithContentDescription("添加附件").performClick()
+        compose.onNodeWithText("文件").assertIsDisplayed()
+        compose.onNodeWithText("语音输入").assertDoesNotExist()
+        compose.onNodeWithContentDescription("收起附件").performClick()
         compose.onAllNodesWithContentDescription("语音输入").assertCountEquals(1)
         compose.onNodeWithContentDescription("语音输入").assertIsEnabled().performClick()
         compose.onNodeWithContentDescription("发送任务").assertDoesNotExist()
@@ -511,6 +791,13 @@ class FinishingInteractionTest {
         captureContextMenu("composer-empty-voice")
         compose.onNode(hasSetTextAction()).performTextInput("测试箭头")
         compose.onNodeWithContentDescription("语音输入").assertDoesNotExist()
+        compose.onNodeWithContentDescription("继续语音输入").assertIsEnabled().performClick()
+        compose.onNodeWithText("测试箭头").assertExists()
+        compose.onNodeWithContentDescription("添加附件").performClick()
+        compose.onNodeWithText("文件").assertIsDisplayed()
+        compose.onNodeWithText("语音输入").assertDoesNotExist()
+        compose.onNodeWithContentDescription("收起附件").performClick()
+        compose.onNodeWithText("测试箭头").assertExists()
         compose.onNodeWithContentDescription("发送任务").assertIsEnabled().performClick()
         compose.waitForIdle()
         assertEquals(bounds.size, compose.onNodeWithTag("composer-primary-action").fetchSemanticsNode().boundsInRoot.size)
@@ -523,8 +810,124 @@ class FinishingInteractionTest {
         }
         compose.onNodeWithContentDescription("发送任务").assertIsEnabled().performClick()
         compose.onNodeWithContentDescription("语音输入").assertDoesNotExist()
-        assertEquals(1, voices)
+        compose.onNodeWithContentDescription("添加附件").performClick()
+        compose.onNodeWithText("文件").assertIsDisplayed()
+        compose.onNodeWithText("语音输入").assertDoesNotExist()
+        assertEquals(2, voices)
         assertEquals(2, sends)
+    }
+
+    @Test fun emptyComposerAlternatesHintsAndStartsVoiceOnHold() {
+        var phase by mutableStateOf<VoiceCapture?>(null)
+        var moves = 0
+        var releases = 0
+        show {
+            val model = remember { isolatedModel() }
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
+                Composer(WorkspaceState(employeeId = "9", voiceCapture = phase), model, {}, {}, {},
+                    voiceHold = VoiceHoldCallbacks(
+                        start = { phase = VoiceCapture.Recording; true },
+                        move = { moves++ },
+                        release = { releases++; phase = null },
+                        cancel = { phase = null },
+                    ))
+            }
+        }
+        compose.onNodeWithText("描述你的任务").assertIsDisplayed()
+        compose.mainClock.advanceTimeBy(3_750)
+        compose.onNodeWithText("长按语音转文字").assertIsDisplayed()
+        val editor = compose.onNode(hasSetTextAction())
+        editor.performTouchInput { down(center) }
+        compose.waitUntil(4_000) { phase == VoiceCapture.Recording }
+        editor.assertIsNotFocused()
+        editor.performTouchInput {
+            moveTo(center - Offset(0f, height * 2f))
+            up()
+        }
+        compose.runOnIdle {
+            assertTrue(moves > 0)
+            assertEquals(1, releases)
+            assertNull(phase)
+        }
+        editor.performTouchInput { click() }
+        editor.assertIsFocused()
+        compose.onNodeWithText("描述你的任务").assertIsDisplayed()
+    }
+
+    @Test fun voiceLongPressKeepsItsPointerUntilItReleasesOverSend() {
+        val targets = VoiceDropTargets()
+        var phase by mutableStateOf<VoiceCapture?>(null)
+        var preview by mutableStateOf("")
+        var destination: VoiceDestination? = null
+        show {
+            val backdrop = rememberHazeState()
+            Box(Modifier.fillMaxSize()) {
+                Canvas(Modifier.fillMaxSize().then(if (phase == null) Modifier else Modifier.hazeSource(backdrop))) {
+                    val barWidth = 3.dp.toPx()
+                    drawRect(Color.White)
+                    repeat(5) { index ->
+                        drawRect(Color(0xFF222222), Offset(index * 2 * barWidth, 0f), Size(barWidth, size.height))
+                    }
+                }
+                Box(Modifier.align(Alignment.BottomEnd).size(52.dp).testTag("voice-press-test")
+                    .holdToTalk(VoiceHoldCallbacks(
+                        start = { targets.holding = true; phase = VoiceCapture.Recording; true },
+                        move = { targets.selected = targets.hit(it) },
+                        release = { destination = targets.hit(it) ?: VoiceDestination.Edit; targets.reset(); phase = null },
+                        cancel = { targets.reset(); phase = null },
+                    ), onTap = {}))
+                phase?.let {
+                    VoiceInputOverlay(it, preview, .08f, VoiceCharacterLimit, null, preview.isNotBlank(), targets,
+                        onComplete = { destination = it; phase = null }, onCancel = { phase = null }, backdrop = backdrop)
+                }
+            }
+        }
+        val press = compose.onNodeWithTag("voice-press-test")
+        val origin = press.fetchSemanticsNode().boundsInRoot.topLeft
+        press.performTouchInput { down(center) }
+        compose.waitUntil(4_000) { phase == VoiceCapture.Recording }
+        compose.onNodeWithText("编辑").assertIsDisplayed()
+        compose.onNodeWithText("发送").assertIsDisplayed()
+        compose.runOnIdle { assertNull(targets.send) }
+        // Allow the frame to reach the window compositor before taking its screenshot.
+        Thread.sleep(160)
+        captureContextMenu("voice-overlay-listening-text-actions")
+        val frame = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+        val pixels = frame.asImageBitmap().toPixelMap()
+        val barWidth = with(compose.density) { 3.dp.toPx() }
+        fun stripeContrast(fraction: Float): Float {
+            val y = (pixels.height * fraction).toInt()
+            return pixels[(barWidth * 1.5f).toInt(), y].red - pixels[(barWidth * 2.5f).toInt(), y].red
+        }
+        assertTrue("Top of the recording overlay should leave the page clear", stripeContrast(.5f) > .75f)
+        assertTrue("Bottom of the recording overlay should soften the page", stripeContrast(.92f) < .30f)
+        frame.recycle()
+        compose.runOnIdle { preview = "转写中的文字" }
+        compose.onNodeWithText("转写中的文字").assertIsDisplayed()
+        compose.onNodeWithText("00:00").assertIsDisplayed()
+        val send = compose.onNodeWithText("发送").fetchSemanticsNode().boundsInRoot.center - origin
+        press.performTouchInput { moveTo(send) }
+        compose.runOnIdle { assertEquals(VoiceDestination.Send, targets.selected); assertNull(destination) }
+        captureContextMenu("voice-overlay-send-selected")
+        press.performTouchInput { up() }
+        compose.runOnIdle { assertEquals(VoiceDestination.Send, destination) }
+        assertEquals("中🐈", "中🐈文".takeVoiceCharacters(2))
+    }
+
+    @Test fun voiceTimerShowsTheRecordedDurationDuringFinalization() {
+        var phase by mutableStateOf(VoiceCapture.Recording)
+        val targets = VoiceDropTargets().apply { holding = true }
+        show {
+            VoiceInputOverlay(phase, "转写中的文字", 0f, VoiceCharacterLimit, null, true,
+                targets, {}, {}, startedAt = 2_000L, stoppedAt = 3_607_000L)
+        }
+        val transcript = compose.onNodeWithText("转写中的文字")
+        val initialBounds = transcript.fetchSemanticsNode().boundsInRoot
+        compose.runOnIdle { targets.holding = false }
+        assertEquals(initialBounds, transcript.fetchSemanticsNode().boundsInRoot)
+        compose.runOnIdle { phase = VoiceCapture.Finalizing }
+        compose.onNodeWithText("正在完成转写… · 1:00:05").assertIsDisplayed()
+        assertEquals(initialBounds, transcript.fetchSemanticsNode().boundsInRoot)
     }
 
     @Test fun sendButtonDismissesTheKeyboardAndClearsInputFocus() {
@@ -579,21 +982,23 @@ class FinishingInteractionTest {
 
     @Test fun skillVersionStateUsesTheChosenAgentsActualReferences() {
         val skill = JSONObject().put("skillId", "author/skill").put("latestVersion", "1.1.0")
-        assertEquals("未配置", skillConfigurationStatus(skill, emptyList()))
+        assertEquals("", skillCatalogueStatus(skill, null, showAdded = true))
         val reference = JSONObject().put("skillId", "author/skill").put("version", "1.1.0")
-        assertEquals("已配置此版本", skillConfigurationStatus(skill, listOf(reference)))
+        assertEquals("已添加", skillCatalogueStatus(skill, reference, showAdded = true))
+        assertEquals("", skillCatalogueStatus(skill, reference, showAdded = false))
         reference.put("version", "1.0.0")
-        assertEquals("已配置 v1.0.0 · 可更新", skillConfigurationStatus(skill, listOf(reference)))
-        skill.put("name", "测试技能").put("author", "发布者")
-        assertFalse(skillCatalogueMetadata(skill, "未配置").contains("测试技能"))
-        skill.put("description", "整理并生成表格")
-        assertEquals("整理并生成表格", skillCatalogueTitle(skill))
-        assertTrue(skillCatalogueMetadata(skill, "未配置").contains("测试技能"))
+        assertEquals("可更新", skillCatalogueStatus(skill, reference, showAdded = false))
+        assertEquals("author/skill", skillCatalogueTitle(skill))
+        skill.put("name", "测试技能").put("author", "发布者").put("description", "整理并生成表格")
+        assertEquals("测试技能", skillCatalogueTitle(skill))
+        assertEquals("整理并生成表格", skillCatalogueDescription(skill))
+        skill.put("summary", "整理表格")
+        assertEquals("整理表格", skillCatalogueDescription(skill))
         assertNotNull(serverAddressError("http://example.com"))
         assertNull(serverAddressError("https://example.com"))
     }
 
-    @Test fun skillHubUsesTheApplicationHeaderOrderAndFlatRows() {
+    @Test fun skillHubShowsNamesAboveDescriptionsAndKeepsEmployeeAndFiltersTogether() {
         show {
             val model = remember { isolatedModel() }
             val skill = JSONObject().put("skillId", "test/skill").put("name", "测试技能")
@@ -602,15 +1007,20 @@ class FinishingInteractionTest {
                 workspace = cc.catsco.core.Workspace(employees = listOf(Employee("9", "测试员工", owner = true), Employee("10", "其他员工"))),
                 resource = ResourceState(value = JSONObject().put("skills", org.json.JSONArray().put(skill)), loaded = true)), model)
         }
-        val employee = compose.onNodeWithTag("skill-agent-row").fetchSemanticsNode().boundsInRoot
+        val employee = compose.onNodeWithTag("skill-agent").fetchSemanticsNode().boundsInRoot
         val search = compose.onNodeWithTag("skill-search").fetchSemanticsNode().boundsInRoot
         val scope = compose.onNodeWithTag("skill-scope").fetchSemanticsNode().boundsInRoot
         val row = compose.onNodeWithTag("skill-row-test/skill").fetchSemanticsNode().boundsInRoot
-        val title = compose.onNodeWithText("整理工作资料", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        assertTrue(employee.bottom <= search.top)
-        assertTrue(search.bottom <= scope.top)
+        val title = compose.onNodeWithText("测试技能", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val description = compose.onNodeWithText("整理工作资料", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue(search.bottom <= employee.top)
+        assertTrue(kotlin.math.abs(employee.center.y - scope.center.y) <= 1f)
+        assertTrue(employee.right <= scope.left)
         assertTrue(scope.bottom <= row.top)
+        assertTrue(title.bottom <= description.top)
         assertTrue(title.left - row.left < 12 * host.resources.displayMetrics.density)
+        compose.onNodeWithText("v1.0.0", substring = true).assertDoesNotExist()
+        compose.onNodeWithTag("skill-filter-all").assertIsSelected().assertIsEnabled()
         compose.onNodeWithTag("skill-agent").performClick()
         compose.onNodeWithTag("skill-agent-menu").assertIsDisplayed()
         compose.onNodeWithText("其他员工").assertDoesNotExist()

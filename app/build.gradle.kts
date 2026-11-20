@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -9,6 +11,15 @@ val publicResources = publicAssets.resolve("res")
 val localResources = file("src/main/res")
 val resourceOverrides = fileTree(publicResources).files.map { it.relativeTo(publicResources) }
 val localOverrideCount = resourceOverrides.count { localResources.resolve(it).isFile }
+val previewNumber = providers.gradleProperty("catscoPreviewNumber").orElse("3").get().toInt()
+val feedbackOrigin = providers.gradleProperty("catscoFeedbackWorkbenchUrl").orElse("").get().trim().trimEnd('/')
+if (feedbackOrigin.isNotEmpty()) {
+    val origin = URI(feedbackOrigin)
+    require(origin.host != null && origin.rawUserInfo == null && origin.rawQuery == null && origin.rawFragment == null && origin.rawPath.isEmpty() &&
+        (origin.scheme == "https" || (origin.scheme == "http" && origin.host in setOf("127.0.0.1", "localhost", "[::1]")))) {
+        "catscoFeedbackWorkbenchUrl must be an HTTPS origin or a local loopback HTTP origin for debug builds."
+    }
+}
 check(localOverrideCount == 0 || localOverrideCount == resourceOverrides.size) {
     "Only part of the local artwork is present. Restore every local asset or use a clean checkout for the public artwork."
 }
@@ -23,9 +34,14 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "FEEDBACK_ORIGIN", "\"${feedbackOrigin.takeIf { it.startsWith("https://") }.orEmpty()}\"")
     }
     buildTypes {
-        debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-debug" }
+        debug {
+            buildConfigField("String", "FEEDBACK_ORIGIN", "\"$feedbackOrigin\"")
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-preview.$previewNumber"
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -43,6 +59,9 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures { compose = true; buildConfig = true }
+}
+androidComponents.onVariants(androidComponents.selector().withBuildType("debug")) { variant ->
+    variant.outputs.forEach { it.versionCode.set(previewNumber) }
 }
 kotlin { jvmToolchain(17) }
 dependencies {

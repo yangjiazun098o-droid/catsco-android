@@ -10,7 +10,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -28,7 +27,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -71,6 +69,7 @@ fun MessageTurnContent(
     onRegenerate: ((MessageTurn) -> Unit)? = null,
     regenerateEnabled: Boolean = true,
     stopping: Boolean = false,
+    showSentReceipt: Boolean = false,
 ) {
     if (mine) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
@@ -90,6 +89,10 @@ fun MessageTurnContent(
                     }
                     turn.files.forEach { MessageFileCard(it, filesEnabled, onPreview, onDownload) }
                 }
+            }
+            if (showSentReceipt) {
+                Text("已发送", Modifier.padding(top = 4.dp, end = 4.dp), fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         return
@@ -232,12 +235,16 @@ private fun MessageWorkingProcess(turn: MessageTurn, active: Boolean) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 40.dp)
-                .clickable(enabled = turn.steps.isNotEmpty(), role = Role.Button, onClickLabel = if (expanded) "收起执行过程" else "展开执行过程") { expanded = !expanded }
+                .catsCoDisclosureClickable(
+                    expanded = expanded,
+                    enabled = turn.steps.isNotEmpty(),
+                    onClickLabel = if (expanded) "收起执行过程" else "展开执行过程",
+                ) { expanded = !expanded }
                 .semantics { stateDescription = if (expanded) "已展开" else "已收起" },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            if (turn.steps.isNotEmpty()) MessageChevron(expanded, MaterialTheme.colorScheme.onSurfaceVariant)
+            if (turn.steps.isNotEmpty()) CatsCoDisclosureChevron(expanded, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(label, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (label == "执行失败") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             Text(count, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (failures > 0) Text("${failures} 步异常", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
@@ -281,12 +288,12 @@ private fun MessageWorkingStep(step: MessageWorkStep) {
     }
     Column(Modifier.fillMaxWidth().animateContentSize(spring(dampingRatio = 1.1f, stiffness = 450f))) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 44.dp).clickable(role = Role.Button) { expanded = !expanded }
+            Modifier.fillMaxWidth().heightIn(min = 44.dp).catsCoDisclosureClickable(expanded) { expanded = !expanded }
                 .semantics { stateDescription = if (expanded) "已展开" else "已收起" },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            MessageChevron(expanded, accent)
+            CatsCoDisclosureChevron(expanded, tint = accent)
             Icon(painterResource(if (step.kind == "subagent") R.drawable.e_people else if (step.kind == "thinking") R.drawable.e_chat else R.drawable.message_terminal), null, Modifier.size(16.dp), tint = accent.copy(alpha = .8f))
             Text(title, Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = accent, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (step.error) Text("失败", fontSize = 12.sp, color = accent)
@@ -354,12 +361,6 @@ private fun PlanStatusIcon(status: String, modifier: Modifier) {
     val icon = when (status) { "completed" -> R.drawable.e_check_circle; "in_progress" -> R.drawable.e_progress_circle; else -> R.drawable.e_circle }
     Icon(painterResource(icon), null,
         modifier.semantics { stateDescription = when (status) { "completed" -> "已完成"; "in_progress" -> "进行中"; else -> "待处理" } }, tint = color)
-}
-
-@Composable
-private fun MessageChevron(expanded: Boolean, color: Color) {
-    val angle by animateFloatAsState(if (expanded) 90f else 0f, spring(dampingRatio = 1.1f, stiffness = 450f), label = "messageDisclosure")
-    Icon(painterResource(R.drawable.e_chevron_right), null, Modifier.size(CatsCoMobileSpec.actionIconSize).rotate(angle), tint = color)
 }
 
 @Composable

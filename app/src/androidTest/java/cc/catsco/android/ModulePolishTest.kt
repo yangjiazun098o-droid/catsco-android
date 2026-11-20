@@ -136,7 +136,7 @@ class ModulePolishTest {
     @Test fun capsuleCanReverseRepeatedlyAndDispatchesOneAction() {
         var expanded by mutableStateOf(false)
         var actions = 0
-        show { CatsCoMorphingMenu(expanded, { expanded = it }, {}, { actions++ }, {}, {}) }
+        show { CatsCoHeaderActionMenu(expanded, { expanded = it }, {}, { actions++ }, {}, {}) }
         compose.mainClock.autoAdvance = false
         repeat(4) {
             compose.runOnUiThread { expanded = !expanded }

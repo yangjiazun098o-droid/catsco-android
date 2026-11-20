@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import cc.catsco.android.WorkspaceState
 import cc.catsco.android.WorkspaceViewModel
+import cc.catsco.android.conversationRunning
 import cc.catsco.android.data.MessageTurn
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
@@ -48,16 +49,28 @@ fun ConversationScreen(state: WorkspaceState, model: WorkspaceViewModel, modifie
     val topic = state.page.removePrefix("chat/")
     val userId = state.session?.userId.orEmpty()
     val agents = state.workspace.employees
-    val turns = remember(state.messages, userId, agents) {
-        cc.catsco.android.data.presentMessages(state.messages, userId, agents.map { it.id }.toSet(), agents.associate { it.id to it.name })
+    val followups = state.conversationFollowups[topic]
+    val followupIds = remember(state.messages, userId, followups) {
+        val pendingIds = followups?.pendingClientIds.orEmpty()
+        val sentIds = followups?.sentMessageIds.orEmpty()
+        if (pendingIds.isEmpty()) sentIds else state.messages.mapNotNullTo(sentIds.toMutableSet()) {
+            it.sequence.takeIf { sequence -> it.senderId == userId && sequence > 0 && it.clientId in pendingIds }
+        }
+    }
+    val turns = remember(state.messages, userId, agents, followupIds) {
+        cc.catsco.android.data.presentMessages(state.messages, userId, agents.map { it.id }.toSet(),
+            agents.associate { it.id to it.name }, followupIds)
     }
     val activeTask = state.conversationRunning && state.messageTarget == 0L
+    val awaitingReply = topic in state.awaitingReplyAfter && state.messageTarget == 0L &&
+        turns.lastOrNull()?.let { !it.assistant && it.senderId == userId } == true
     val stopping = state.stoppingTopic == topic
     val agentId = state.workspace.conversations.find { it.id == topic }?.agentId
     val agentName = agents.find { it.id == agentId }?.name.orEmpty()
-    val displayTurns = remember(turns, userId, activeTask, agentId, agentName) {
-        conversationDisplayTurns(turns, activeTask, agentId.orEmpty(), agentName)
+    val displayTurns = remember(turns, activeTask, awaitingReply, agentId, agentName, followupIds) {
+        conversationDisplayTurns(turns, activeTask, agentId.orEmpty(), agentName, awaitingReply, followupIds)
     }
+    val currentReplyKey = displayTurns.lastOrNull { it.assistant }?.key
     val showConnection = state.connection in setOf("未连接", "连接已断开", "正在重连")
     val hasHeader = state.messageTarget > 0 || showConnection
     CompositionLocalProvider(LocalOpenSidebar provides onOpenSidebar) {
@@ -82,14 +95,15 @@ fun ConversationScreen(state: WorkspaceState, model: WorkspaceViewModel, modifie
                         turn = turn,
                         mine = turn.senderId == userId,
                         senderName = turn.senderName.ifBlank { agents.find { it.id == turn.senderId }?.name.orEmpty() },
-                        active = activeTask && turn.key == displayTurns.lastOrNull()?.key,
+                        active = (activeTask || awaitingReply) && turn.key == currentReplyKey,
                         filesEnabled = !state.busy && state.exportFile == null,
                         onPreview = model::openAttachment,
                         onDownload = model::downloadAttachment,
                         onQuote = model::quoteMessage,
                         onRegenerate = model::regenerate,
                         regenerateEnabled = !state.busy && !state.sending && !state.uploading && !state.preview,
-                        stopping = stopping && turn.key == displayTurns.lastOrNull()?.key,
+                        stopping = stopping && turn.key == currentReplyKey,
+                        showSentReceipt = turn.messageId == followups?.lastSentMessageId && turn.messageId > 0,
                     )
             }
         }
@@ -97,22 +111,35 @@ fun ConversationScreen(state: WorkspaceState, model: WorkspaceViewModel, modifie
 }
 
 /** Keep the live response's UI identity through waiting, streaming and persisted history. */
-internal fun conversationDisplayTurns(turns: List<MessageTurn>, active: Boolean, agentId: String, agentName: String): List<MessageTurn> {
+internal fun conversationDisplayTurns(turns: List<MessageTurn>, active: Boolean, agentId: String, agentName: String,
+    awaitingReply: Boolean = false, followupMessageIds: Set<Long> = emptySet()): List<MessageTurn> {
     var responseKey = "response:initial"
     var firstReply = true
-    val displayed = turns.map { turn ->
+    var pendingAfter = -1
+    val displayed = turns.mapIndexed { index, turn ->
         if (!turn.assistant) {
-            responseKey = "response:${turn.key}"
-            firstReply = true
+            val followup = turn.messageId in followupMessageIds
+            // A follow-up can arrive before the original reply has produced its first frame.
+            if (!followup || !firstReply) {
+                responseKey = "response:${turn.key}"
+                firstReply = true
+            }
+            if (!followup) pendingAfter = index
             turn
-        } else if (firstReply) {
-            firstReply = false
-            turn.copy(key = responseKey)
-        } else turn
+        } else {
+            pendingAfter = -1
+            if (firstReply) {
+                firstReply = false
+                turn.copy(key = responseKey)
+            } else turn
+        }
     }
-    if (!active || turns.lastOrNull()?.assistant == true) return displayed
+    if ((!active && !awaitingReply) || (pendingAfter < 0 && turns.isNotEmpty())) return displayed
     // A presentation-only waiting slot. It carries no message ID, body or persisted record.
-    return displayed + MessageTurn(responseKey, agentId, agentName, true, emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "", false)
+    return displayed.toMutableList().apply {
+        add(pendingAfter + 1, MessageTurn(responseKey, agentId, agentName, true, emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
+            if (active) "" else "awaiting_reply", false))
+    }
 }
 
 @Composable

@@ -5,7 +5,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -25,6 +26,9 @@ internal fun AgentSettingsSheet(employee: Employee, state: WorkspaceState, model
     val details = state.agentSettings ?: return
     val quota = details.quota?.let(::agentQuotaPresentation)
     val loadingText = if (details.loading) "读取中…" else "暂不可用"
+    val employees = state.workspace.employees
+    val canSwitch = state.page == "home" && employees.any { it.id != employee.id }
+    var showSwitcher by rememberSaveable(employee.id) { mutableStateOf(false) }
     AgentSettingsLayout(sheet, model::dismissAgentSettings) {
         Surface(shape = CatsCoMobileSpec.settingsGroupShape, color = MaterialTheme.colorScheme.surface) {
             Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -36,13 +40,19 @@ internal fun AgentSettingsSheet(employee: Employee, state: WorkspaceState, model
                     Text(employee.name, fontSize = 18.sp, lineHeight = 25.sp, fontWeight = FontWeight.SemiBold, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     Text(if (employee.online) "当前在线" else "当前离线", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                if (canSwitch) {
+                    CatsCoSecondaryButton(
+                        onClick = { showSwitcher = true },
+                        contentPadding = PaddingValues(horizontal = 14.dp),
+                    ) { Text("切换", maxLines = 1) }
+                }
             }
         }
         Column {
             val entries = buildList {
-                add(SettingsEntry("当前模型", value = quota?.model ?: loadingText, action = null))
+                add(SettingsEntry(if (employee.owner) "切换模型" else "当前模型",
+                    value = quota?.model ?: loadingText, action = if (employee.owner) "model/${employee.id}" else null))
                 add(SettingsEntry("剩余额度", value = quota?.remaining ?: loadingText, action = null))
-                if (employee.owner) add(SettingsEntry("模型设置", R.drawable.e_settings, action = "model/${employee.id}"))
             }
             SettingsGroup("模型", entries, model::openAgentSettingsPage)
             details.error?.let { error ->
@@ -65,6 +75,19 @@ internal fun AgentSettingsSheet(employee: Employee, state: WorkspaceState, model
             SettingsEntry("用户名", value = employee.username.ifBlank { "未提供" }, action = null),
             SettingsEntry("员工 ID", value = employee.id, action = null),
         ), model::openAgentSettingsPage)
+    }
+    if (showSwitcher && canSwitch) {
+        AgentPicker(
+            employees, employee, state.session, model.accountImages,
+            onDismiss = { showSwitcher = false },
+            onSelected = { id ->
+                showSwitcher = false
+                if (id != employee.id) {
+                    model.selectEmployee(id)
+                    model.showAgentSettings(id)
+                }
+            },
+        )
     }
 }
 

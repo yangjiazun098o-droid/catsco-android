@@ -16,11 +16,16 @@ if (!/^[a-zA-Z0-9.:-]+$/.test(serial) || !Number.isInteger(port) || port < 1024 
   throw Error('Invalid preview device configuration');
 }
 const phone = !serial.startsWith('emulator-');
+const notificationReview = !phone && process.env.CATSCO_PREVIEW_SCENE === 'notifications';
 const origin = `http://127.0.0.1:${port}`;
 const videoClients = new Set();
+const keyFrameWaiters = new Set();
+let keyFrameTimer;
 let recording, videoPending = Buffer.alloc(0), sps, pps;
 function wsSend(socket, bytes) {
-  if (socket.writableLength > 2 * 1024 * 1024) return;
+  if (socket.destroyed) return;
+  // A slow viewer needs a fresh key frame instead of a stream with missing deltas.
+  if (socket.writableLength > 256 * 1024) { socket.destroy(); return; }
   const header = Buffer.alloc(bytes.length < 65536 ? 4 : 10); header[0] = 0x82;
   if (bytes.length < 65536) { header[1] = 126; header.writeUInt16BE(bytes.length, 2); }
   else { header[1] = 127; header.writeBigUInt64BE(BigInt(bytes.length), 2); }
@@ -46,7 +51,14 @@ function startVideo() {
       else if (type === 8) pps = nal;
       else if ((type === 5 || type === 1) && sps && pps) {
         const payload = type === 5 ? Buffer.concat([sps, pps, nal]) : nal;
-        for (const client of videoClients) wsSend(client, payload);
+        if (type === 5) {
+          keyFrameWaiters.clear();
+          clearTimeout(keyFrameTimer);
+          keyFrameTimer = undefined;
+        }
+        for (const client of videoClients) {
+          if (!keyFrameWaiters.has(client)) wsSend(client, payload);
+        }
       }
     }
     if (videoPending.length > 8 * 1024 * 1024) videoPending = Buffer.alloc(0);
@@ -78,7 +90,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/config') {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.end(JSON.stringify({ deviceWidth, deviceHeight, videoWidth, videoHeight, phone })); return;
+      res.end(JSON.stringify({ deviceWidth, deviceHeight, videoWidth, videoHeight, phone, notificationReview })); return;
     }
     if (req.method === 'GET' && url.pathname === '/frame.png') {
       const current = await screenshot(); res.setHeader('Content-Type', 'image/png'); res.end(current.bytes); return;
@@ -93,7 +105,17 @@ const server = http.createServer(async (req, res) => {
         if (!values.every((value, index) => Number.isInteger(value) && value >= 0 && value < (index % 2 ? deviceHeight : deviceWidth))) throw Error('Invalid position');
         await run(['shell', 'input', 'swipe', ...values.map(String), '180']);
       } else if (url.pathname === '/back') await run(['shell', 'input', 'keyevent', '4']);
-      else if (url.pathname === '/launch') await run(['shell', 'am', 'start', '-n', 'cc.catsco.android.debug/cc.catsco.android.MainActivity']);
+      else if (url.pathname === '/launch') {
+        const launch = notificationReview
+          ? ['-S', '-n', 'cc.catsco.android.debug/cc.catsco.android.NotificationReviewActivity']
+          : ['-n', 'cc.catsco.android.debug/cc.catsco.android.MainActivity'];
+        await run(['shell', 'am', 'start', ...launch]);
+      } else if (url.pathname === '/preview-event' && notificationReview) {
+        const event = url.searchParams.get('kind');
+        if (!['completed', 'failed', 'quota'].includes(event)) throw Error('Invalid notification preview event');
+        await run(['shell', 'am', 'broadcast', '-a', 'cc.catsco.android.debug.PREVIEW_NOTIFICATION',
+          '-p', 'cc.catsco.android.debug', '--es', 'event', event]);
+      }
       else if (url.pathname === '/theme' && !phone) {
         const mode = url.searchParams.get('mode');
         if (!['yes', 'no'].includes(mode)) throw Error('Invalid theme');
@@ -112,7 +134,23 @@ server.on('upgrade', (req, socket) => {
   socket.on('error', () => socket.destroy());
   socket.on('data', data => { if ((data[0] & 15) === 8) socket.end(); });
   videoClients.add(socket);
-  if (recording) recording.kill(); else startVideo();
-  socket.on('close', () => { videoClients.delete(socket); if (!videoClients.size) recording?.kill(); });
+  keyFrameWaiters.add(socket);
+  if (recording && !keyFrameTimer) {
+    // Prefer the next natural key frame. Some devices send only deltas for long periods.
+    keyFrameTimer = setTimeout(() => {
+      keyFrameTimer = undefined;
+      if (keyFrameWaiters.size) recording?.kill();
+    }, 1200);
+  }
+  startVideo();
+  socket.on('close', () => {
+    videoClients.delete(socket);
+    keyFrameWaiters.delete(socket);
+    if (!videoClients.size) {
+      clearTimeout(keyFrameTimer);
+      keyFrameTimer = undefined;
+      recording?.kill();
+    }
+  });
 });
 

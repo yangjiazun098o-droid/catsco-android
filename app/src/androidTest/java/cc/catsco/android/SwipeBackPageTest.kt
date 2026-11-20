@@ -31,7 +31,7 @@ class SwipeBackPageTest {
     private var backs = 0
     private lateinit var host: MessageReviewActivity
 
-    private fun show() {
+    private fun show(capturePreview: Boolean = true) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.uiAutomation.executeShellCommand(
             "am start -W -n cc.catsco.android.debug/cc.catsco.android.MessageReviewActivity",
@@ -43,7 +43,8 @@ class SwipeBackPageTest {
             host.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             host.setContent {
                 CatsCoTheme {
-                    SwipeBackPage(page, "previous", page == "details", { backs++; page = "previous" }) {
+                    SwipeBackPage(page, "previous", page == "details", { backs++; page = "previous" },
+                        captureEnabled = capturePreview) {
                         Column(Modifier.fillMaxSize().background(if (page == "previous") Color(0xFF168044) else Color(0xFF1845C0))) {
                             Text(page, Modifier.padding(24.dp), color = Color.White)
                             if (page == "previous") Button(onClick = { page = "details" }) { Text("打开详情") }
@@ -104,6 +105,23 @@ class SwipeBackPageTest {
         }
         compose.waitForIdle()
         compose.runOnIdle { assertEquals("previous", page); assertEquals(2, backs) }
+    }
+
+    @Test fun uncachedDestinationDoesNotExposeBlankBackgroundDuringTheDrag() {
+        show(capturePreview = false)
+        compose.onRoot().performTouchInput {
+            down(Offset(width * .12f, height * .6f))
+            moveTo(Offset(width * .8f, height * .6f), 400)
+        }
+        compose.runOnIdle { assertEquals("details", page); assertEquals(0, backs) }
+        val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+        try {
+            val pixels = screenshot.asImageBitmap().toPixelMap()
+            val left = pixels[(pixels.width * .1f).toInt(), (pixels.height * .6f).toInt()]
+            assertTrue("The outgoing page should still fill the left side: $left", left.blue > left.green * 2)
+        } finally { screenshot.recycle() }
+        compose.onRoot().performTouchInput { up() }
+        compose.runOnIdle { assertEquals("previous", page); assertEquals(1, backs) }
     }
 
     @Test fun shortSlowDragAndVerticalScrollDoNotNavigate() {

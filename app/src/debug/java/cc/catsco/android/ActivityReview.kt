@@ -1,7 +1,9 @@
 package cc.catsco.android
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -19,6 +21,7 @@ import kotlinx.coroutines.delay
 internal fun ColumnScope.ActivityReview() {
     var phase by rememberSaveable { mutableStateOf("thinking") }
     var draft by rememberSaveable { mutableStateOf("") }
+    var followups by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var replay by remember { mutableIntStateOf(0) }
     var previewText by remember { mutableStateOf("") }
     val answer = "先统一运行反馈，再核对输入栏的操作与停止状态。\n\n加载气泡会自然展开，正文接着流式出现。"
@@ -47,7 +50,7 @@ internal fun ColumnScope.ActivityReview() {
         }
     }
     TextButton(onClick = { replay++ }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("重播气泡展开", fontSize = 13.sp) }
-    Column(Modifier.weight(1f).padding(16.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
+    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
         Text("请整理今天的讨论。", fontSize = 16.sp)
         MessageTurnContent(
             turn = MessageTurn("activity-review", "9", "自迭代", true,
@@ -58,15 +61,34 @@ internal fun ColumnScope.ActivityReview() {
             mine = false, senderName = "自迭代", active = running,
             filesEnabled = false, onPreview = {}, onDownload = {}, stopping = stopping,
         )
+        followups.forEachIndexed { index, message ->
+            MessageTurnContent(
+                turn = MessageTurn("followup-$index", "user", "", false, emptyList(), emptyList(), emptyList(),
+                    listOf(message), emptyList(), "", false),
+                mine = true, senderName = "", active = false, filesEnabled = false, onPreview = {}, onDownload = {},
+                showSentReceipt = index == followups.lastIndex,
+            )
+        }
     }
     Box(Modifier.padding(horizontal = 10.dp, vertical = 12.dp)) {
         CatsCoComposerFrame {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
                 BasicTextField(draft, { draft = it }, Modifier.weight(1f).heightIn(min = 48.dp).padding(vertical = 11.dp),
                     textStyle = LocalTextStyle.current.copy(fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface),
-                    decorationBox = { inner -> if (draft.isEmpty()) Text("示例输入", fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); inner() })
+                    decorationBox = { inner ->
+                        if (draft.isEmpty()) Text(if (running || stopping) "补充要求" else "示例输入",
+                            fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        inner()
+                    })
                 ComposerSendButton(running, stopping, draft.isNotBlank(),
-                    onSend = { draft = ""; replay++; phase = "thinking" }, onStop = { replay = 0; phase = "stopping" })
+                    hasDraft = draft.isNotBlank(),
+                    onSend = {
+                        if (running) followups = ArrayList(followups + draft)
+                        else replay++
+                        draft = ""
+                    },
+                    onStop = { replay = 0; phase = "stopping" },
+                )
             }
         }
     }
