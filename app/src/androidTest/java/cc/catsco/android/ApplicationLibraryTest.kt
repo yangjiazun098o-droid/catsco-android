@@ -85,20 +85,26 @@ class ApplicationLibraryTest {
         bitmap.recycle()
     }
 
-    @Test fun filtersAreOrderedAndIntersectFavoritesWithAgent() {
+    @Test fun searchSitsAboveTheSharedToolbarAndFiltersIntersectWithEmployee() {
         show()
-        val left = compose.onNodeWithTag("application-scope").fetchSemanticsNode().boundsInRoot
-        val right = compose.onNodeWithTag("application-agent").fetchSemanticsNode().boundsInRoot
-        assertTrue(left.top >= right.bottom)
+        val search = compose.onNodeWithTag("application-search").fetchSemanticsNode().boundsInRoot
+        val employee = compose.onNodeWithTag("application-agent").fetchSemanticsNode().boundsInRoot
+        val scope = compose.onNodeWithTag("application-scope").fetchSemanticsNode().boundsInRoot
+        assertTrue(search.bottom <= employee.top)
+        assertEquals(employee.center.y, scope.center.y, 1f)
+        assertTrue(employee.right <= scope.left)
+        compose.onNodeWithTag("application-filter-all").assertIsSelected()
         capture("light-list")
         compose.onNodeWithTag("application-more-demo-1").performClick()
         compose.onNode(hasText("收藏") and hasAnyAncestor(hasTestTag("application-action-menu")), useUnmergedTree = true).performClick()
-        compose.onNodeWithText("收藏", useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("application-filter-favorites").performClick().assertIsSelected()
         compose.onNodeWithText("云端共享表格").assertIsDisplayed()
         compose.onNodeWithText("CatsCo 图片素材工作台").assertDoesNotExist()
         compose.onNodeWithTag("application-agent").performClick()
         compose.onNodeWithText("ty 的云", useUnmergedTree = true).performClick()
         compose.onNodeWithText("还没有收藏的应用").assertIsDisplayed()
+        compose.onNodeWithTag("application-filter-manageable").performClick().assertIsSelected()
+        compose.onNodeWithText("没有可管理的应用").assertIsDisplayed()
     }
 
     @Test fun actionsHaveEqualRowsAndInvokeTheSelectedApplication() {
@@ -121,11 +127,12 @@ class ApplicationLibraryTest {
         capture("dark-list")
     }
 
-    @Test fun rightSwipeRevealsFavoriteAndSearchStaysAboveList() {
+    @Test fun rightSwipeDoesNotRevealFavoriteAndSearchStaysAboveList() {
         show()
         compose.onNodeWithTag("application-row-demo-1").performTouchInput { swipeRight(startX = width * .3f, endX = width * .8f) }
-        compose.onNodeWithTag("application-swipe-favorite").assertIsDisplayed().performClick()
-        assertTrue(applicationKey(apps.first()) in favorites)
+        compose.onNodeWithTag("application-swipe-favorite").assertDoesNotExist()
+        assertTrue(favorites.isEmpty())
+        assertEquals("", opened)
         compose.onNodeWithTag("application-list").performScrollToNode(hasText("项目应用 18"))
         compose.onNodeWithTag("application-list").performScrollToIndex(apps.lastIndex)
         val last = compose.onNodeWithText("项目应用 18").fetchSemanticsNode().boundsInRoot

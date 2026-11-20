@@ -1,6 +1,5 @@
 package cc.catsco.android.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
@@ -8,12 +7,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import cc.catsco.android.R
 import cc.catsco.android.WorkspaceState
 import cc.catsco.android.WorkspaceViewModel
 import cc.catsco.android.data.first
@@ -36,10 +32,10 @@ internal fun ModelUsageCard(summary: JSONObject, title: String? = null, details:
         }
         summary.first("model").takeIf(String::isNotBlank)?.let { Text(it, fontSize = 16.sp) }
         HorizontalDivider(thickness = .5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { expanded = !expanded },
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).catsCoDisclosureClickable(expanded) { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically) {
             Text("模型服务详情", Modifier.weight(1f), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Icon(painterResource(R.drawable.e_expand), null, Modifier.size(23.dp).graphicsLayer { rotationZ = if (expanded) 180f else 0f })
+            CatsCoDisclosureChevron(expanded, size = 23.dp)
         }
         if (expanded) ModuleInfoRows(listOf(
             "服务来源" to displayModuleStatus(summary.first("provider")),

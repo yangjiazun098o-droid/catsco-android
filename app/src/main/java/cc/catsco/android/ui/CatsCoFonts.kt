@@ -11,6 +11,7 @@ import cc.catsco.android.R
 
 /** Shared by Compose, native Markdown, text measurement and hosted knowledge. */
 internal val CatsCoFontFamily = FontFamily(
+    Font(R.font.alibaba_puhuiti_light, FontWeight.Light),
     Font(R.font.alibaba_puhuiti_regular, FontWeight.Normal),
     Font(R.font.alibaba_puhuiti_medium, FontWeight.Medium),
     Font(R.font.alibaba_puhuiti_semibold, FontWeight.SemiBold),

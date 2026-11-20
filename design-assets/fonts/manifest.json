@@ -3,6 +3,13 @@
   "source": "阿里巴巴普惠体 2.0.zip",
   "files": [
     {
+      "weight": 300,
+      "source": "AlibabaPuHuiTi-2-45-Light.ttf",
+      "resource": "alibaba_puhuiti_light.ttf",
+      "bytes": 8476208,
+      "sha256": "487fe081aa8dae0cdc8aba1c76e594ac384a4e8faf4702c4077f1ad2de2e5a5a"
+    },
+    {
       "weight": 400,
       "source": "Alibaba_PuHuiTi_2.0_55_Regular_55_Regular.ttf",
       "resource": "alibaba_puhuiti_regular.ttf",

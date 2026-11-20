@@ -2,8 +2,9 @@ package cc.catsco.android.ui
 
 import android.graphics.Paint
 import android.graphics.Rect
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,6 +16,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -94,8 +98,10 @@ internal fun CatsCoHomeAgent(
     imageLoader: ImageLoader? = null,
     compact: Boolean = false,
     onPickerVisibility: (Boolean) -> Unit = {},
+    onPressActive: (Boolean) -> Unit = {},
 ) {
-    val employee = employees.find { it.id == selectedId } ?: employees.firstOrNull()
+    val selectedIndex = employees.indexOfFirst { it.id == selectedId }.coerceAtLeast(0)
+    val employee = employees.getOrNull(selectedIndex)
     val images = imageLoader ?: LocalContext.current.imageLoader
     var expanded by rememberSaveable { mutableStateOf(false) }
     val visibility by rememberUpdatedState(onPickerVisibility)
@@ -108,18 +114,45 @@ internal fun CatsCoHomeAgent(
         Text("暂无可用 Agent", modifier.padding(16.dp), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
     }
+    val employeeIds = remember(employees) { employees.map { it.id } }
+    val pager = rememberPagerState(initialPage = selectedIndex) { employees.size }
+    val select by rememberUpdatedState(onSelected)
+    LaunchedEffect(pager, employeeIds, employee.id) {
+        if (pager.settledPage != selectedIndex) pager.scrollToPage(selectedIndex)
+        snapshotFlow { pager.settledPage }.collect { page ->
+            employeeIds.getOrNull(page)?.takeIf { it != employee.id }?.let(select)
+        }
+    }
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val opacity by animateFloatAsState(if (pressed) .72f else 1f, tween(90), label = "homeAgentPress")
-    AgentIdentity(employee, session, images, compact,
-        modifier.widthIn(max = 280.dp).graphicsLayer { alpha = if (expanded) 0f else opacity }
-            .testTag("home-agent-card")
-            .combinedClickable(
-                interactionSource = interaction, indication = null,
-                role = Role.Button,
-                onClickLabel = "Agent 设置", onClick = { onSettings(employee.id) },
-                onLongClickLabel = "切换 Agent", onLongClick = { expanded = true },
-            ).padding(8.dp))
+    val press = updateTransition(pressed, label = "homeAgentPress")
+    val opacity by press.animateFloat(transitionSpec = { tween(90) }) { if (it) .72f else 1f }
+    val pressActive = pressed || press.currentState || press.isRunning || pager.isScrollInProgress
+    val reportPress by rememberUpdatedState(onPressActive)
+    DisposableEffect(pressActive) {
+        reportPress(pressActive)
+        onDispose { if (pressActive) reportPress(false) }
+    }
+    HorizontalPager(
+        state = pager,
+        modifier = modifier.widthIn(max = 280.dp).fillMaxWidth().testTag("home-agent-pager"),
+        key = { employees[it].id },
+        userScrollEnabled = employees.size > 1 && !expanded,
+        flingBehavior = PagerDefaults.flingBehavior(state = pager, snapPositionalThreshold = .24f),
+    ) { page ->
+        val agent = employees[page]
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            AgentIdentity(agent, session, images, compact,
+                Modifier.graphicsLayer { alpha = if (expanded) 0f else opacity }
+                    .testTag(if (page == pager.settledPage) "home-agent-card" else "home-agent-card-${agent.id}")
+                    .combinedClickable(
+                        interactionSource = interaction, indication = null,
+                        role = Role.Button,
+                        onClickLabel = "Agent 设置", onClick = { onSettings(agent.id) },
+                        onLongClickLabel = "切换 Agent", onLongClick = { expanded = true },
+                    ).padding(8.dp))
+        }
+    }
     if (expanded) AgentPicker(employees, employee, session, images,
         onDismiss = { expanded = false },
         onSelected = { id -> expanded = false; if (id != selectedId) onSelected(id) },
@@ -153,9 +186,9 @@ private fun AgentIdentity(employee: Employee, session: Session?, images: ImageLo
 }
 
 @Composable
-private fun AgentPicker(
+internal fun AgentPicker(
     employees: List<Employee>, employee: Employee, session: Session?, images: ImageLoader,
-    onDismiss: () -> Unit, onSelected: (String) -> Unit, onSettings: () -> Unit,
+    onDismiss: () -> Unit, onSelected: (String) -> Unit, onSettings: (() -> Unit)? = null,
 ) {
     val parentDensity = LocalDensity.current
     Dialog(onDismissRequest = onDismiss,
@@ -182,7 +215,7 @@ private fun AgentPicker(
                     val alignment = BiasAlignment(0f, if (availableHeight >= 520.dp) .6f else 0f)
                     Column(Modifier.align(alignment).widthIn(max = 264.dp).fillMaxWidth().heightIn(max = availableHeight),
                         horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (availableHeight >= 520.dp) {
+                        if (availableHeight >= 520.dp && onSettings != null) {
                             AgentIdentity(employee, session, images, false,
                                 Modifier.widthIn(max = 280.dp).clickable(onClickLabel = "Agent 设置", onClick = onSettings).padding(8.dp))
                             Spacer(Modifier.height(24.dp))

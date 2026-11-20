@@ -8,15 +8,18 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -36,6 +39,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.window.DialogProperties
 
 @Composable
@@ -70,6 +74,7 @@ internal fun CatsCoAlertDialog(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CatsCoButton(
     onClick: () -> Unit,
@@ -86,18 +91,22 @@ internal fun CatsCoButton(
     interactionSource: MutableInteractionSource? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
-    Button(
-        onClick = onClick,
-        modifier = modifier.heightIn(min = CatsCoMobileSpec.minimumTouchTarget),
-        enabled = enabled,
-        shape = shape,
-        colors = colors,
-        elevation = elevation,
-        border = border,
-        contentPadding = contentPadding,
-        interactionSource = interactionSource,
-        content = content,
-    )
+    val interaction = interactionSource ?: remember { MutableInteractionSource() }
+    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+        Button(
+            onClick = onClick,
+            modifier = modifier.heightIn(min = CatsCoMobileSpec.minimumTouchTarget)
+                .indication(interaction, if (enabled) CatsCoPressFeedback(colors.contentColor, shape) else null),
+            enabled = enabled,
+            shape = shape,
+            colors = colors,
+            elevation = elevation,
+            border = border,
+            contentPadding = contentPadding,
+            interactionSource = interaction,
+            content = content,
+        )
+    }
 }
 
 @Composable
@@ -115,11 +124,32 @@ internal fun CatsCoSecondaryButton(
         ), contentPadding = contentPadding, content = content)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun CatsCoBoundedIconButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    visualSize: Dp = CatsCoMobileSpec.headerButtonVisual,
+    feedbackColor: Color = MaterialTheme.colorScheme.onSurface,
+    pressOpacity: Float = .055f,
+    content: @Composable () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+        IconButton(onClick, modifier, enabled, interactionSource = interaction) {
+            Box(Modifier.size(visualSize)
+                .indication(interaction, if (enabled) CatsCoPressFeedback(feedbackColor, CircleShape, pressOpacity = pressOpacity) else null),
+                contentAlignment = Alignment.Center) { content() }
+        }
+    }
+}
+
 @Composable
 internal fun ModuleActionRow(label: String, icon: Int? = null, enabled: Boolean = true,
     trailing: Boolean = false, danger: Boolean = false, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = CatsCoMobileSpec.settingsRowHeight)
-        .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(vertical = 12.dp),
+        .catsCoActionClickable(enabled = enabled, onClick = onClick).padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         val color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
         icon?.let { Icon(painterResource(it), null, Modifier.size(CatsCoMobileSpec.actionIconSize), tint = color) }
@@ -133,19 +163,21 @@ internal fun ModuleActionRow(label: String, icon: Int? = null, enabled: Boolean 
 internal fun CatsCoSegmentedControl(options: List<Pair<String, String>>, selected: String,
     onSelect: (String) -> Unit, modifier: Modifier = Modifier, testTagPrefix: String = "segment", enabled: Boolean = true) {
     if (options.isEmpty()) return
-    BoxWithConstraints(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+    Box(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
         .background(MaterialTheme.colorScheme.secondaryContainer).padding(4.dp).selectableGroup()) {
-        val width = maxWidth / options.size
         val index = options.indexOfFirst { it.first == selected }.coerceAtLeast(0)
-        val offset by animateDpAsState(width * index, tween(200, easing = CubicBezierEasing(.2f, .7f, .2f, 1f)), label = "segment-position")
+        val position by animateFloatAsState(index.toFloat(),
+            spring(dampingRatio = 1f, stiffness = 1000f, visibilityThreshold = .002f), label = "segment-position")
         val color = MaterialTheme.colorScheme.surface
         Box(Modifier.matchParentSize().drawBehind {
-            drawRoundRect(color, Offset(offset.toPx(), 0f), Size(width.toPx(), size.height), CornerRadius(10.dp.toPx()))
+            val segmentWidth = size.width / options.size
+            drawRoundRect(color, Offset(position * segmentWidth, 0f), Size(segmentWidth, size.height), CornerRadius(10.dp.toPx()))
         })
         Row {
             options.forEachIndexed { optionIndex, (id, label) ->
                 Box(Modifier.weight(1f).heightIn(min = 48.dp)
-                    .selectable(id == selected, enabled = enabled, role = Role.Tab) { onSelect(id) }
+                    .selectable(id == selected, interactionSource = null, indication = null,
+                        enabled = enabled, role = Role.Tab) { onSelect(id) }
                     .testTag("$testTagPrefix-$optionIndex"), contentAlignment = Alignment.Center) {
                     Text(label, Modifier.padding(horizontal = 8.dp, vertical = 8.dp), fontSize = 15.sp,
                         lineHeight = 22.sp, fontWeight = FontWeight.Medium)

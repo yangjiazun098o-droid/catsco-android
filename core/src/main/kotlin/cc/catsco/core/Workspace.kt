@@ -34,6 +34,10 @@ fun List<Employee>.prioritizedForTasks(): List<Employee> = sortedWith(
         .thenByDescending { if (it.owner) it.createdAt else it.addedAt },
 )
 
+/** Reuse the last successful choice if still available, then use the priority-ordered roster. */
+fun List<Employee>.defaultTaskEmployeeId(lastTaskEmployeeId: String): String =
+    (firstOrNull { it.id == lastTaskEmployeeId } ?: firstOrNull())?.id.orEmpty()
+
 fun List<Employee>.withObservedAdditions(previous: List<Employee>?, now: Long): List<Employee> {
     val priorById = previous.orEmpty().associateBy { it.id }
     return map { employee ->
@@ -55,6 +59,17 @@ data class Conversation(
     val date: String = "",
     val agentId: String = "",
     val task: Boolean = false,
+    val projectId: String = "",
+    val runStatus: ConversationRunStatus? = null,
+)
+data class ConversationRunStatus(
+    val topic: String,
+    val runId: String,
+    val state: String,
+    val summary: String,
+    val error: String,
+    val sourceId: String,
+    val updatedAt: Long,
 )
 data class Project(val id: String, val name: String)
 data class Workspace(val employees: List<Employee> = emptyList(), val conversations: List<Conversation> = emptyList(), val projects: List<Project> = emptyList())

@@ -71,4 +71,5 @@ data class ComposerDraft(
     val fingerprint: String = "",
     val pendingTaskAgent: String = "",
     val quote: MessageQuote? = null,
+    val taskTitle: String = "",
 )

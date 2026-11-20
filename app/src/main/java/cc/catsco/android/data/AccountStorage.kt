@@ -50,15 +50,20 @@ class AccountStorage(context: Context) {
         val quote = value.optJSONObject("quote")?.takeIf { it.optLong("message_id") > 0 }?.let {
             MessageQuote(it.optLong("message_id"), it.optString("sender_name"), it.optString("text"))
         }
-        return ComposerDraft(value.optString("text"), value.objects("files").map(::attachment), value.optString("client_id"), value.optString("fingerprint"), value.optString("pending_agent"), quote)
+        return ComposerDraft(value.optString("text"), value.objects("files").map(::attachment), value.optString("client_id"), value.optString("fingerprint"), value.optString("pending_agent"), quote, taskTitle = value.optString("task_title"))
     }
 
     fun saveDraft(session: Session, topic: String, draft: ComposerDraft) = write(session, "draft:$topic", JSONObject()
         .put("text", draft.text).put("files", JSONArray(draft.attachments.map { JSONObject(it.raw) }))
         .put("client_id", draft.clientId).put("fingerprint", draft.fingerprint).put("pending_agent", draft.pendingTaskAgent)
+        .put("task_title", draft.taskTitle)
         .put("quote", draft.quote?.let { JSONObject().put("message_id", it.messageId).put("sender_name", it.senderName).put("text", it.text) }).toString())
 
     fun workspace(session: Session): Workspace = cachedWorkspace(session) ?: Workspace()
+
+    fun lastTaskEmployeeId(session: Session): String = read(session, "new-task:last-employee").orEmpty()
+
+    fun saveLastTaskEmployeeId(session: Session, id: String) = write(session, "new-task:last-employee", id)
 
     fun cachedWorkspace(session: Session): Workspace? {
         val value = read(session, "workspace")?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
@@ -68,7 +73,7 @@ class AccountStorage(context: Context) {
                     if (it.has("cloud") && !it.isNull("cloud")) it.optBoolean("cloud") else null,
                     it.optLong("createdAt"), it.optLong("addedAt"), it.optString("avatarUrl"), it.optString("username"))
             }.prioritizedForTasks(),
-            value.objects("conversations").map { Conversation(it.optString("id"), it.optString("name"), it.optString("preview"), false, it.optString("date"), it.optString("agentId"), it.optBoolean("task")) },
+            value.objects("conversations").map { Conversation(it.optString("id"), it.optString("name"), it.optString("preview"), false, it.optString("date"), it.optString("agentId"), it.optBoolean("task"), it.optString("projectId")) },
         )
     }
 
@@ -78,7 +83,10 @@ class AccountStorage(context: Context) {
                 .put("cloud", it.cloud ?: JSONObject.NULL).put("createdAt", it.createdAt).put("addedAt", it.addedAt)
                 .put("avatarUrl", it.avatarUrl).put("username", it.username)
         }))
-        .put("conversations", JSONArray(workspace.conversations.map { JSONObject().put("id", it.id).put("name", it.name).put("preview", it.preview).put("date", it.date).put("agentId", it.agentId).put("task", it.task) })).toString())
+        .put("conversations", JSONArray(workspace.conversations.map {
+            JSONObject().put("id", it.id).put("name", it.name).put("preview", it.preview).put("date", it.date)
+                .put("agentId", it.agentId).put("task", it.task).put("projectId", it.projectId)
+        })).toString())
 
     fun clear(session: Session) {
         val prefix = prefix(session)
