@@ -107,13 +107,15 @@ class SwipeBackPageTest {
         compose.runOnIdle { assertEquals("previous", page); assertEquals(2, backs) }
     }
 
-    @Test fun uncachedDestinationDoesNotExposeBlankBackgroundDuringTheDrag() {
+    @Test fun uncachedDestinationStillFollowsTheDragWithoutMovingThePageOffscreen() {
         show(capturePreview = false)
         compose.onRoot().performTouchInput {
             down(Offset(width * .12f, height * .6f))
             moveTo(Offset(width * .8f, height * .6f), 400)
         }
         compose.runOnIdle { assertEquals("details", page); assertEquals(0, backs) }
+        val visibleOffset = compose.onNodeWithTag("swipe-back-page").getUnclippedBoundsInRoot().left
+        assertTrue("Expected a restrained drag when the destination has no snapshot: $visibleOffset", visibleOffset > 0.dp)
         val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
         try {
             val pixels = screenshot.asImageBitmap().toPixelMap()
@@ -121,6 +123,25 @@ class SwipeBackPageTest {
             assertTrue("The outgoing page should still fill the left side: $left", left.blue > left.green * 2)
         } finally { screenshot.recycle() }
         compose.onRoot().performTouchInput { up() }
+        compose.runOnIdle { assertEquals("previous", page); assertEquals(1, backs) }
+    }
+
+    @Test fun systemBackCanTakeOverAnInProgressTouchWithoutCommittingTwice() {
+        show()
+        compose.onRoot().performTouchInput {
+            down(Offset(width * .12f, height * .6f))
+            moveTo(Offset(width * .55f, height * .6f), 350)
+        }
+        compose.runOnIdle {
+            host.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 600f, 0f, BackEventCompat.EDGE_LEFT))
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            host.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(400f, 600f, .55f, BackEventCompat.EDGE_LEFT))
+        }
+        compose.onRoot().performTouchInput { up() }
+        compose.runOnIdle { assertEquals("details", page); assertEquals(0, backs) }
+        compose.runOnIdle { host.onBackPressedDispatcher.onBackPressed() }
         compose.runOnIdle { assertEquals("previous", page); assertEquals(1, backs) }
     }
 

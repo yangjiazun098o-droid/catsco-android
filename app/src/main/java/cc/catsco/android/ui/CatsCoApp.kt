@@ -546,10 +546,11 @@ internal fun workspaceBackdropBlur(drawer: DrawerState, drawerWidth: Int, agentB
             val headerBackdrop = rememberHazeState()
             key(state.session?.server, state.session?.userId, state.localDataEpoch, state.appearance) {
             SwipeBackPage(state.page, model.backDestination,
-                enabled = !sidebarPage && !drawerVisible && state.agentSettings == null,
+                enabled = !sidebarPage && !drawerVisible && !headerMenuVisible && !agentOverlayVisible && !voiceOverlayShowing,
                 onBack = model::back,
                 inSettings = model.inSettingsFlow,
                 homeTrayExpanded = homeTrayExpanded,
+                contentReady = !state.resource.loading || state.resource.loaded,
                 captureEnabled = !drawerVisible && !headerMenuVisible && !agentOverlayVisible && !homeAgentPressActive &&
                     !composerKeyboardActive && !voiceOverlayShowing && agentBlurSettled && !state.sending && !state.conversationRunning &&
                     state.page.removePrefix("chat/") !in state.awaitingReplyAfter,

@@ -50,7 +50,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.coroutines.resume
@@ -58,6 +60,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 
 private const val PreviewQuietPeriodMillis = 80L
 private const val PreviewRefreshIntervalMillis = 150L
+private enum class BackGesture { Touch, System }
 
 private class PageHistory(var page: String, var back: String, var inSettings: Boolean) {
     var gestureDestination: String? = null
@@ -78,6 +81,7 @@ internal fun SwipeBackPage(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     captureEnabled: Boolean = true,
+    contentReady: Boolean = true,
     inSettings: Boolean = false,
     homeTrayExpanded: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
@@ -88,7 +92,9 @@ internal fun SwipeBackPage(
             .filterIsInstance<Activity>().firstOrNull()?.window
     }
     val canCapture by rememberUpdatedState(captureEnabled)
+    val ready by rememberUpdatedState(contentReady)
     val currentPage by rememberUpdatedState(page)
+    val destination by rememberUpdatedState(previousPage)
     var sourceRect by remember { mutableStateOf<Rect?>(null) }
     val scope = rememberCoroutineScope()
     val background = MaterialTheme.colorScheme.background
@@ -99,15 +105,19 @@ internal fun SwipeBackPage(
     val back by rememberUpdatedState(onBack)
     var offset by remember(page) { mutableFloatStateOf(0f) }
     var dragging by remember(page) { mutableStateOf(false) }
+    var gestureOwner by remember(page) { mutableStateOf<BackGesture?>(null) }
     var dragPreview by remember(page) { mutableStateOf<ImageBitmap?>(null) }
     var settling by remember(page) { mutableStateOf<Job?>(null) }
     var captureJob by remember(page) { mutableStateOf<Job?>(null) }
     val previewTiming = remember(page) { PagePreviewTiming() }
     var landingPreview by remember { mutableStateOf<Pair<String, ImageBitmap>?>(null) }
+    val landingOpacity = remember(landingPreview) { Animatable(1f) }
     val history = remember { PageHistory(page, previousPage, inSettings) }
     val navigationDirection = remember(page) {
         when {
-            history.page == page || history.gestureDestination == page || (!inSettings && !history.inSettings) -> 0
+            history.page == page -> 0
+            history.gestureDestination == page -> if (landingPreview?.first == page) 0 else -1
+            !inSettings && !history.inSettings -> 0
             page == history.back || !inSettings -> -1
             else -> 1
         }
@@ -131,17 +141,18 @@ internal fun SwipeBackPage(
             settling?.cancel()
             offset = 0f
             dragging = false
+            gestureOwner = null
             dragPreview = null
         }
     }
 
     fun capturePage(settledTray: Boolean = false) {
-        if (window == null || sourceRect == null || !canCapture || dragging || offset != 0f || navigating || landingPreview != null) return
+        if (window == null || sourceRect == null || !canCapture || !ready || dragging || offset != 0f || navigating || landingPreview != null) return
         previewTiming.drawRevision++
         previewTiming.lastDrawAt = SystemClock.uptimeMillis()
         if (captureJob?.isActive == true) return
         captureJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            while (canCapture && currentPage == page && !dragging && offset == 0f && !navigating && landingPreview == null) {
+            while (canCapture && ready && currentPage == page && !dragging && offset == 0f && !navigating && landingPreview == null) {
                 val now = SystemClock.uptimeMillis()
                 // The first frame provides a return preview. Later frames wait for idle,
                 // including on home while the caret, welcome animation or IME are moving.
@@ -156,13 +167,14 @@ internal fun SwipeBackPage(
                 }
                 val revision = previewTiming.drawRevision
                 // PixelCopy reads the presented window. Let the pending draw be submitted first.
-                if (settledTray && captureImmediately) view.awaitCommittedFrame() else withFrameNanos { }
-                if (!canCapture || currentPage != page || dragging || offset != 0f || navigating || landingPreview != null) return@launch
+                if (captureImmediately || settledTray) withTimeoutOrNull(80) { view.awaitCommittedFrame() }
+                else withFrameNanos { }
+                if (!canCapture || !ready || currentPage != page || dragging || offset != 0f || navigating || landingPreview != null) return@launch
                 if (!captureImmediately && previewTiming.drawRevision != revision) continue
                 val region = sourceRect ?: return@launch
                 previewTiming.lastCopyAt = SystemClock.uptimeMillis()
                 val preview = copyPageWindow(window, region) ?: return@launch
-                if (canCapture && currentPage == page && !dragging && offset == 0f && !navigating && landingPreview == null && region == sourceRect &&
+                if (canCapture && ready && currentPage == page && !dragging && offset == 0f && !navigating && landingPreview == null && region == sourceRect &&
                     region.width() == currentViewport.width && region.height() == currentViewport.height) {
                     val updated = LinkedHashMap(snapshots)
                     updated.remove(page)
@@ -199,7 +211,7 @@ internal fun SwipeBackPage(
         }
     }
 
-    LaunchedEffect(page, hasDrawn, sourceRect, captureEnabled, navigating) {
+    LaunchedEffect(page, hasDrawn, sourceRect, captureEnabled, contentReady, navigating) {
         if (hasDrawn && captureEnabled && !navigating) capturePage()
     }
     DisposableEffect(page) {
@@ -209,56 +221,70 @@ internal fun SwipeBackPage(
         }
     }
 
-    LaunchedEffect(page, hasDrawn, landingPreview?.first) {
-        if (hasDrawn && landingPreview?.first == page) {
-            // Scaffold and the restored composer's bottom inset settle on the next frames.
-            // Keep the identical preview above them until the live layout has been drawn.
-            repeat(2) { withFrameNanos { } }
+    LaunchedEffect(page, hasDrawn, landingPreview) {
+        val landing = landingPreview ?: return@LaunchedEffect
+        if (landing.first != page) {
             landingPreview = null
+            return@LaunchedEffect
         }
+        if (!hasDrawn) return@LaunchedEffect
+        withTimeoutOrNull(220) { snapshotFlow { ready }.first { it } }
+        withTimeoutOrNull(80) { view.awaitCommittedFrame() }
+        landingOpacity.animateTo(0f, tween(110))
+        landingPreview = null
     }
 
-    fun beginDrag() {
+    fun beginDrag(owner: BackGesture): Boolean {
+        if (owner == BackGesture.Touch && gestureOwner == BackGesture.System) return false
         settling?.cancel()
-        dragPreview = snapshots[previousPage]
+        if (!dragging) {
+            landingPreview = null
+            dragPreview = snapshots[destination]
+        }
+        gestureOwner = owner
         dragging = true
+        return true
     }
 
-    fun settle(complete: Boolean, velocity: Float = 0f) {
+    fun settle(owner: BackGesture, complete: Boolean, velocity: Float = 0f) {
+        if (gestureOwner != owner) return
         settling?.cancel()
         settling = scope.launch {
             val preview = dragPreview
-            // Without a captured destination, moving the foreground only exposes a blank frame.
-            if (preview != null) {
-                val target = if (complete) viewport.width.toFloat() else 0f
-                val remaining = abs(target - offset) / viewport.width.coerceAtLeast(1)
-                val duration = (100 + remaining * 130).toInt()
+            val target = if (complete) viewport.width.toFloat() else 0f
+            val remaining = abs(target - offset) / viewport.width.coerceAtLeast(1)
+            if (remaining > .001f) {
+                val duration = if (preview == null) (90 + remaining * 65).toInt() else (100 + remaining * 130).toInt()
                 animate(offset, target, initialVelocity = velocity,
                     animationSpec = tween(duration, easing = FastOutSlowInEasing)) { value, _ -> offset = value }
-            } else offset = 0f
+            }
+            if (gestureOwner != owner || currentPage != page) return@launch
             if (complete) {
-                history.gestureDestination = previousPage
-                landingPreview = preview?.let { previousPage to it }
+                history.gestureDestination = destination
+                landingPreview = preview?.let { destination to it }
+                gestureOwner = null
                 back()
             } else {
+                offset = 0f
                 dragging = false
                 dragPreview = null
+                gestureOwner = null
             }
         }
     }
 
     PredictiveBackHandler(enabled = enabled) { progress ->
         val initial = offset
-        beginDrag()
+        beginDrag(BackGesture.System)
         try {
             progress.collect { event -> offset = initial + (viewport.width - initial) * event.progress }
-            settle(true)
+            settle(BackGesture.System, true)
         } catch (_: CancellationException) {
-            settle(false)
+            settle(BackGesture.System, false)
         }
     }
 
-    val gesture = Modifier.pointerInput(page, enabled, viewport) {
+    val gesture = Modifier.pointerInput(page, enabled) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             if (!enabled) return@awaitEachGesture
@@ -266,15 +292,16 @@ internal fun SwipeBackPage(
             velocity.addPosition(down.uptimeMillis, down.position)
             var initialDrag = 0f
             val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, overSlop ->
-                if (overSlop > 0f) {
+                if (overSlop > 0f && gestureOwner != BackGesture.System) {
                     change.consume()
                     initialDrag = overSlop
                 }
             } ?: return@awaitEachGesture
-            beginDrag()
+            if (!beginDrag(BackGesture.Touch)) return@awaitEachGesture
             offset = (offset + initialDrag).coerceIn(0f, viewport.width.toFloat())
             velocity.addPosition(start.uptimeMillis, start.position)
             val released = horizontalDrag(start.id) { change ->
+                if (gestureOwner != BackGesture.Touch) return@horizontalDrag
                 velocity.addPosition(change.uptimeMillis, change.position)
                 offset = (offset + change.position.x - change.previousPosition.x)
                     .coerceIn(0f, viewport.width.toFloat())
@@ -283,18 +310,21 @@ internal fun SwipeBackPage(
             val speed = velocity.calculateVelocity().x
             val complete = released && (offset > viewport.width * .32f ||
                 (offset > 24.dp.toPx() && speed > 700.dp.toPx())) && speed > -500.dp.toPx()
-            settle(complete, speed)
+            settle(BackGesture.Touch, complete, speed)
         }
     }
 
     Box(Modifier.fillMaxSize().clipToBounds().background(background).onSizeChanged {
         if (viewport != it) {
-            if (viewport.width != it.width) snapshots = emptyMap()
+            if (viewport.width != it.width) {
+                snapshots = emptyMap()
+                settling?.cancel()
+                offset = 0f
+                dragging = false
+                dragPreview = null
+                gestureOwner = null
+            }
             viewport = it
-            settling?.cancel()
-            offset = 0f
-            dragging = false
-            dragPreview = null
         }
     }.onGloballyPositioned { coordinates ->
         val bounds = coordinates.boundsInWindow()
@@ -310,9 +340,9 @@ internal fun SwipeBackPage(
         }
         Box(modifier.fillMaxSize().testTag("swipe-back-page").then(if (enabled || dragging || navigating) Modifier.graphicsLayer {
             val progress = if (dragging) 1f else navigationProgress.value
-            val visibleOffset = if (dragPreview != null) offset else 0f
+            // Keep the current page mostly in view while its destination has no preview.
+            val visibleOffset = if (dragPreview != null) offset else offset * .07f
             translationX = visibleOffset + 18.dp.toPx() * navigationDirection * (1f - progress)
-            alpha = .92f + .08f * progress
             shadowElevation = if (visibleOffset > 0f) 12.dp.toPx() else 0f
             shape = RoundedCornerShape(if (visibleOffset > 0f) 16.dp else 0.dp)
             clip = true
@@ -321,7 +351,7 @@ internal fun SwipeBackPage(
             if (!hasDrawn) hasDrawn = true
         }, content = content)
         landingPreview?.takeIf { it.first == page }?.let { (_, preview) ->
-            Image(preview, null, Modifier.fillMaxSize().background(background),
+            Image(preview, null, Modifier.fillMaxSize().graphicsLayer { alpha = landingOpacity.value }.background(background),
                 contentScale = ContentScale.FillWidth, alignment = androidx.compose.ui.Alignment.TopStart)
         }
     }
