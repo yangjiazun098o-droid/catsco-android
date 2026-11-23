@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-class ApiFailure(val status: Int, detail: String = "") : Exception(when (status) {
+class ApiFailure(val status: Int, val detail: String = "") : Exception(when (status) {
     401 -> "登录已过期，请重新登录。"
     403 -> "当前账号没有权限。"
     404 -> "此功能在当前服务器上暂不可用。"

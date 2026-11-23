@@ -66,6 +66,9 @@ fun moduleTitle(page: String): String = when {
     page.startsWith("files/") -> "云端文件"
     page.startsWith("topic-files/") -> "对话文件"
     page.startsWith("select-device/") -> "选择电脑"
+    page == "commercial-plans" -> "购买套餐"
+    page == "commercial-topup" -> "点数充值"
+    page.startsWith("commercial-order/") -> "订单详情"
     page == "appearance" -> PersonalizationTitle
     else -> mapOf("apps" to "应用", "skills" to "SkillHub", "devices" to "我的电脑", "device-audit" to "连接记录", "desktop-connect" to "连接电脑", "profile" to "个人资料", "usage" to "模型用量", "commercial" to "套餐与权益", "redeem" to "兑换邀请码", "orders" to "订单记录", "relay-key" to "模型访问凭证", "files" to "云端文件", "agents" to "员工管理", "contacts" to "联系人与群组", "people-search" to "添加好友", "message-search" to "搜索消息", "service-agents" to "定制 Agent", "cloud-workers" to "云托管", "notifications" to "消息通知", "surfaces" to "桌面组件", "offline" to "缓存与草稿", "feedback" to "反馈", "server" to "服务器")[page] ?: "CatsCo"
 }
@@ -135,10 +138,15 @@ fun WorkspaceModuleScreen(state: WorkspaceState, model: WorkspaceViewModel, init
             page == "profile" -> ProfileEditor(state, model)
             page == "usage" -> UsageDetails(value, model)
             page == "commercial" -> CommercialDetails(state, model)
+            page == "commercial-plans" -> CommercialPlans(state, model)
+            page == "commercial-topup" -> CommercialTopup(state, model)
+            page.startsWith("commercial-order/") -> CommercialOrderDetails(state, model)
             page == "redeem" -> ModuleForm { InviteRedemption(state, model) }
             page == "orders" -> Records(value.objects("orders", "items"), R.drawable.e_file, empty = "暂无订单",
                 pagination = state.resource, loadMore = model::loadMoreRecords,
-                detail = { listOf(displayOrderStatus(it.first("status", "state")), displayModuleDate(it.first("created_at")), orderAmount(it)).filter(String::isNotBlank).joinToString(" · ") })
+                title = { it.first("plan_name", "order_no").ifBlank { "订单" } },
+                detail = { listOf(commercialOrderStatus(it), displayModuleDate(it.first("created_at")), orderAmount(it)).filter(String::isNotBlank).joinToString(" · ") },
+                onClick = { order -> commercialOrderNumber(order.first("order_no"))?.let { model.navigate("commercial-order/$it") } })
             page == "feedback" -> FeedbackEditor(state, model)
             page == "server" -> ModuleForm {
                 ModuleSection {
@@ -264,8 +272,8 @@ private fun fileDescription(record: JSONObject, state: WorkspaceState): String {
 }
 
 @Composable
-private fun ModuleForm(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(24.dp), content = content)
+internal fun ModuleForm(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(24.dp), content = content)
 }
 
 @Composable
@@ -542,6 +550,10 @@ private fun CommercialDetails(state: WorkspaceState, model: WorkspaceViewModel) 
     val usageModel = usage?.first("model").orEmpty()
     val matched = entitlements.indexOfFirst { usageModel.isNotBlank() && it.first("model") == usageModel }
     ModuleForm {
+        SettingsGroup("购买", listOf(
+            SettingsEntry("购买套餐", R.drawable.e_sparkle, action = "commercial-plans"),
+            SettingsEntry("点数充值", R.drawable.e_add, action = "commercial-topup"),
+        ), model::navigate)
         val planName = summary.first("plan_name", "name")
         if (planName.isNotBlank() || summary.first("credit_balance", "credits", "balance").isNotBlank()) ModuleSection("账户概览") {
             Field("当前套餐", planName)
@@ -551,7 +563,7 @@ private fun CommercialDetails(state: WorkspaceState, model: WorkspaceViewModel) 
         if (usage != null && matched < 0) ModelUsageCard(usage, "共享模型服务")
         value.first("model_usage_error").takeIf(String::isNotBlank)?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp) }
         if (entitlements.isEmpty() && usage == null) ModuleSection {
-            ModuleEmpty("暂无已开通的权益", "可以在网页版查看当前可开通的套餐。")
+            ModuleEmpty("暂无已开通的权益", "可以查看可购买的套餐，或兑换邀请码。")
         }
         entitlements.forEachIndexed { index, entitlement ->
             if (index == matched && usage != null) {

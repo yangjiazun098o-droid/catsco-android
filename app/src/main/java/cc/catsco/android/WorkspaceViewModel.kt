@@ -1674,6 +1674,81 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun notice(text: String) { mutable.update { it.copy(notice = text) } }
+    internal fun createCommercialPurchase(purchase: CommercialPurchase, onFailure: (String) -> Unit) {
+        val page = mutable.value.page
+        val expectedPage = if (purchase.planId == null) "commercial-topup" else "commercial-plans"
+        val catalog = mutable.value.resource.value
+        if (page != expectedPage || !alipayAvailable(catalog)) return
+        action(onFailure) { session ->
+            val saved = withContext(Dispatchers.IO) {
+                storage.read(session, purchase.storageKey)?.takeIf(String::isNotBlank)?.let(::JSONObject)
+                    ?: JSONObject().put("id", UUID.randomUUID().toString()).also {
+                        storage.write(session, purchase.storageKey, it.toString())
+                    }
+            }
+            // Reuse the request after a timeout, or reopen the order if we already received it.
+            val existingOrder = commercialOrderNumber(saved.optString("order_no"))
+            val response = try {
+                if (existingOrder != null) request(session, CommercialOrdersPath, mapOf("order_no" to existingOrder))
+                else request(session, CommercialOrdersPath, method = "POST", body = purchase.requestBody(saved.getString("id")))
+            } catch (error: ApiFailure) {
+                throw commercialActionError(error)
+            }
+            val order = response.optJSONObject("order")
+            check(order != null && purchase.matchesOrder(order)) { "订单内容暂时无法确认，请在订单记录中查看。" }
+            val orderNo = commercialOrderNumber(order.optString("order_no"))
+            check(orderNo != null && (existingOrder == null || existingOrder == orderNo)) { "暂时无法读取订单编号，请在订单记录中查看。" }
+            withContext(Dispatchers.IO) {
+                val value = if (commercialOrderFinished(order)) "" else saved.put("order_no", orderNo).toString()
+                storage.write(session, purchase.storageKey, value)
+            }
+            if (mutable.value.page == page) navigate("commercial-order/$orderNo")
+        }
+    }
+
+    internal fun cancelCommercialOrder(orderNo: String, onFailure: (String) -> Unit) {
+        val page = "commercial-order/$orderNo"
+        val current = mutable.value
+        val order = current.resource.value.optJSONObject("order")
+        if (current.page != page || commercialOrderNumber(orderNo) == null || order == null ||
+            order.optString("order_no") != orderNo || !commercialOrderCancelable(order)) return
+        action(onFailure) { session ->
+            try {
+                request(session, "$CommercialOrdersPath/cancel", method = "POST", body = JSONObject().put("order_no", orderNo))
+            } catch (error: ApiFailure) {
+                throw commercialActionError(error)
+            } finally {
+                if (mutable.value.page == page) loadResource()
+            }
+        }
+    }
+
+    private fun commercialActionError(error: ApiFailure): Exception {
+        if (error.status == 401) return error
+        val localized = commercialPurchaseError(error.detail)
+        return when {
+            localized != error.detail -> IllegalStateException(localized)
+            error.detail in setOf("当前套餐已生效，不能重复购买", "当前套餐已包含该套餐，不能降级购买", "套餐额度暂时无法同步，请稍后重试") ->
+                IllegalStateException(error.detail)
+            error.detail == "已有待支付套餐订单，请先完成或取消" -> IllegalStateException("已有待支付套餐订单，请在订单记录中完成或取消。")
+            else -> error
+        }
+    }
+
+    private suspend fun loadCommercialOrder(session: Session, orderNo: String): JSONObject {
+        if (commercialOrderNumber(orderNo) == null) throw ApiFailure(404)
+        val result = request(session, CommercialOrdersPath, mapOf("order_no" to orderNo))
+        val order = checkNotNull(result.optJSONObject("order")) { "暂时无法读取订单，请重试。" }
+        check(order.optString("order_no") == orderNo) { "暂时无法读取订单，请重试。" }
+        if (commercialOrderFinished(order)) commercialPurchaseKey(order)?.let { key ->
+            withContext(Dispatchers.IO) {
+                val saved = storage.read(session, key)?.takeIf(String::isNotBlank)?.let(::JSONObject)
+                if (saved?.optString("order_no") == orderNo) storage.write(session, key, "")
+            }
+        }
+        return result
+    }
+
     fun report(error: Exception, prefix: String = "") {
         if (error is ApiFailure && error.status == 401) { logout(error.message, keepAccountData = true); return }
         mutable.update { it.copy(error = listOf(prefix, operationErrorMessage(error)).filter(String::isNotBlank).joinToString("\n")) }
@@ -1925,7 +2000,23 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
             catch (canceled: CancellationException) { throw canceled }
             catch (_: Exception) { commercial.put("model_usage_error", "模型用量暂时无法读取。") }
         }
-        page == "orders" -> request(session, "/api/relay/commercial/orders", cursor + ("limit" to "20"))
+        page == "commercial-plans" -> coroutineScope {
+            val account = async { request(session, "/api/relay/commercial") }
+            request(session, "/api/relay/commercial/catalog").put("account", account.await())
+        }
+        page == "commercial-topup" -> coroutineScope {
+            val credits = async {
+                try { request(session, "/api/relay/credits") }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) {
+                    if (error is ApiFailure && error.status == 401) throw error
+                    null
+                }
+            }
+            request(session, "/api/relay/commercial/catalog").put("credit_account", credits.await())
+        }
+        page.startsWith("commercial-order/") -> loadCommercialOrder(session, page.removePrefix("commercial-order/"))
+        page == "orders" -> request(session, CommercialOrdersPath, cursor + ("limit" to "20"))
         page == "cloud-workers" -> request(session, "/api/cloud-workers")
         page == "agents" -> request(session, "/api/bots")
         page.startsWith("agent-access/") -> {
