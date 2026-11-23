@@ -87,7 +87,7 @@ fun MessageTurnContent(
                     SelectionContainer {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             turn.text.forEach {
-                                Text(it, fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .86f))
+                                Text(it, fontSize = 16.sp, lineHeight = 25.sp, color = conversationBubbleTextColor(mine = true))
                             }
                         }
                     }
@@ -139,8 +139,10 @@ private fun MessageReplyBody(paragraphs: List<String>, modifier: Modifier = Modi
 
 @Composable
 private fun MessageReplyContent(paragraphs: List<String>) {
-    Column(Modifier.padding(horizontal = 15.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        paragraphs.forEach { MarkdownContent(it) }
+    CompositionLocalProvider(LocalMarkdownForeground provides conversationBubbleTextColor(mine = false)) {
+        Column(Modifier.padding(horizontal = 15.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            paragraphs.forEach { MarkdownContent(it) }
+        }
     }
 }
 

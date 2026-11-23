@@ -12,6 +12,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,6 +41,8 @@ internal val LocalConversationBubbleTones = staticCompositionLocalOf { Conversat
 internal val UserBubbleShape = RoundedCornerShape(16.dp)
 internal val AgentBubbleShape = RoundedCornerShape(15.dp)
 
+private fun defaultUserBubbleColor(dark: Boolean) = if (dark) Color(0xFF2C2C2E) else Color(0xFFE6E6E9)
+
 @Composable
 internal fun conversationBubbleColor(mine: Boolean): Color {
     val colors = MaterialTheme.colorScheme
@@ -48,8 +51,21 @@ internal fun conversationBubbleColor(mine: Boolean): Color {
     val tone = if (mine) tones.user else tones.agent
     return when {
         tone != BubbleTone.Default -> if (dark) tone.dark else tone.light
-        mine -> if (dark) Color(0xFF2C2C2E) else Color(0xFFE6E6E9)
+        mine -> defaultUserBubbleColor(dark)
         else -> colors.surface
+    }
+}
+
+@Composable
+internal fun conversationBubbleTextColor(mine: Boolean): Color {
+    val colors = MaterialTheme.colorScheme
+    val dark = colors.background.luminance() < .5f
+    // Resolve the previous translucent text against its default bubble once so that
+    // every selected tint displays the same opaque text within the current theme.
+    return when {
+        mine -> colors.onSurface.copy(alpha = .86f).compositeOver(defaultUserBubbleColor(dark))
+        dark -> colors.onSurface.copy(alpha = .86f).compositeOver(colors.surface)
+        else -> colors.onSurface
     }
 }
 
@@ -85,14 +101,14 @@ internal fun PersonalizationSettings(
                         shape = UserBubbleShape, color = conversationBubbleColor(mine = true),
                     ) {
                         Text("我的气泡预览", Modifier.padding(horizontal = 14.dp, vertical = 10.dp), fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = .86f))
+                            color = conversationBubbleTextColor(mine = true))
                     }
                     Surface(
                         modifier = Modifier.align(Alignment.Start).widthIn(max = 280.dp),
                         shape = AgentBubbleShape, color = conversationBubbleColor(mine = false),
                     ) {
                         Text("Agent 气泡预览", Modifier.padding(horizontal = 14.dp, vertical = 10.dp), fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface)
+                            color = conversationBubbleTextColor(mine = false))
                     }
                 }
             }

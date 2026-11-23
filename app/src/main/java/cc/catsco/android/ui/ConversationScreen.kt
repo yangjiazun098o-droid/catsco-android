@@ -10,6 +10,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.PlatformTextStyle
@@ -65,6 +67,7 @@ private class MarkdownDocuments {
         .also { documents.put(text, it) }
 }
 private val LocalMarkdownDocuments = staticCompositionLocalOf<MarkdownDocuments?> { null }
+internal val LocalMarkdownForeground = staticCompositionLocalOf { Color.Unspecified }
 
 @Composable
 fun ConversationScreen(state: WorkspaceState, model: WorkspaceViewModel, modifier: Modifier = Modifier,
@@ -244,9 +247,11 @@ fun MarkdownContent(text: String) {
 }
 
 @Composable
-private fun markdownForeground() = MaterialTheme.colorScheme.onSurface.copy(
-    alpha = if (MaterialTheme.colorScheme.background.luminance() < .5f) .86f else 1f,
-)
+private fun markdownForeground() = LocalMarkdownForeground.current.takeOrElse {
+    MaterialTheme.colorScheme.onSurface.copy(
+        alpha = if (MaterialTheme.colorScheme.background.luminance() < .5f) .86f else 1f,
+    )
+}
 
 @Composable
 private fun MarkdownBlocks(renderer: Markwon, blocks: List<Node>, spacing: Dp = 14.dp) {

@@ -12,6 +12,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -431,6 +432,53 @@ class FinishingInteractionTest {
         assertEquals(idleColor, rowBackground())
         disclosure.performClick()
         compose.onNodeWithText("服务来源").assertDoesNotExist()
+    }
+
+    @Test fun conversationBubbleTextStaysTheSameWhenOnlyTheBackgroundChanges() {
+        val userText = "用户正文"
+        val agentText = "Agent 正文"
+        var dark by mutableStateOf(false)
+        var custom by mutableStateOf(false)
+        var backgrounds = emptyList<Color>()
+        show {
+            CatsCoTheme(dark = dark) {
+                val tones = if (custom) ConversationBubbleTones(BubbleTone.Blue, BubbleTone.Rose) else ConversationBubbleTones()
+                CompositionLocalProvider(LocalConversationBubbleTones provides tones) {
+                    val userBackground = conversationBubbleColor(mine = true)
+                    val agentBackground = conversationBubbleColor(mine = false)
+                    SideEffect { backgrounds = listOf(userBackground, agentBackground) }
+                    Column {
+                        MessageTurnContent(reply.copy(text = listOf(userText)), true, "", false, false, {}, {})
+                        MessageTurnContent(reply.copy(text = listOf(agentText)), false, "Agent", false, false, {}, {})
+                    }
+                }
+            }
+        }
+        fun foregrounds(): Pair<Int, Int> {
+            val action = compose.onNodeWithText(userText, useUnmergedTree = true)
+                .fetchSemanticsNode().config[SemanticsActions.GetTextLayoutResult].action!!
+            return compose.runOnIdle {
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                assertTrue(action(layouts))
+                val views = arrayListOf<android.view.View>()
+                host.window.decorView.findViewsWithText(views, agentText, android.view.View.FIND_VIEWS_WITH_TEXT)
+                layouts.single().layoutInput.style.color.toArgb() to views.filterIsInstance<MessageTextView>().single().currentTextColor
+            }
+        }
+        val defaultForegrounds = mutableListOf<Pair<Int, Int>>()
+        for (theme in listOf(false, true)) {
+            compose.runOnIdle { dark = theme; custom = false }
+            val initial = foregrounds()
+            val initialBackgrounds = compose.runOnIdle { backgrounds }
+            compose.runOnIdle { custom = true }
+            assertEquals(initial, foregrounds())
+            compose.runOnIdle {
+                assertTrue(initialBackgrounds.zip(backgrounds).all { (default, tinted) -> default != tinted })
+            }
+            defaultForegrounds += initial
+        }
+        assertNotEquals(defaultForegrounds.first().first, defaultForegrounds.last().first)
+        assertNotEquals(defaultForegrounds.first().second, defaultForegrounds.last().second)
     }
 
     @Test fun computerConnectionOptionsExpandInPlace() {
