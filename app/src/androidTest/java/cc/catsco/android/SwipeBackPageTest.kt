@@ -111,10 +111,11 @@ class SwipeBackPageTest {
         show(capturePreview = false)
         compose.onRoot().performTouchInput {
             down(Offset(width * .12f, height * .6f))
-            moveTo(Offset(width * .8f, height * .6f), 400)
+            moveTo(Offset(width * .44f, height * .6f), 175)
+            moveTo(Offset(width * .8f, height * .6f), 175)
         }
         compose.runOnIdle { assertEquals("details", page); assertEquals(0, backs) }
-        Thread.sleep(80)
+        Thread.sleep(200)
         val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
         try {
             val pixels = screenshot.asImageBitmap().toPixelMap()

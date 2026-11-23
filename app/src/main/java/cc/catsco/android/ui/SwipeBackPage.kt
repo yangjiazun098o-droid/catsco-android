@@ -25,6 +25,7 @@ import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
@@ -45,6 +46,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -338,13 +340,15 @@ internal fun SwipeBackPage(
                 alpha = .14f * (1f - offset / viewport.width.coerceAtLeast(1))
             }.background(Color.Black))
         }
-        Box(modifier.fillMaxSize().testTag("swipe-back-page").then(if (enabled || dragging || navigating) Modifier.graphicsLayer {
+        Box(modifier.fillMaxSize().testTag("swipe-back-page").then(if (enabled || dragging || navigating) Modifier.absoluteOffset {
+            // The uncached page exposes only a narrow neutral strip while following the drag.
+            IntOffset(if (dragPreview == null) (offset * .07f).roundToInt() else 0, 0)
+        }.graphicsLayer {
             val progress = if (dragging) 1f else navigationProgress.value
-            // Keep the current page mostly in view while its destination has no preview.
-            val visibleOffset = if (dragPreview != null) offset else offset * .07f
+            val visibleOffset = if (dragPreview != null) offset else 0f
             translationX = visibleOffset + 18.dp.toPx() * navigationDirection * (1f - progress)
-            shadowElevation = if (visibleOffset > 0f) 12.dp.toPx() else 0f
-            shape = RoundedCornerShape(if (visibleOffset > 0f) 16.dp else 0.dp)
+            shadowElevation = if (offset > 0f) 12.dp.toPx() else 0f
+            shape = RoundedCornerShape(if (offset > 0f) 16.dp else 0.dp)
             clip = true
         } else Modifier).drawWithContent {
             drawContent()
