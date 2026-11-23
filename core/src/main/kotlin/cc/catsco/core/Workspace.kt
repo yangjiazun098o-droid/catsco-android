@@ -34,6 +34,10 @@ fun List<Employee>.prioritizedForTasks(): List<Employee> = sortedWith(
         .thenByDescending { if (it.owner) it.createdAt else it.addedAt },
 )
 
+/** Reuse the last successful choice if still available, then use the priority-ordered roster. */
+fun List<Employee>.defaultTaskEmployeeId(lastTaskEmployeeId: String): String =
+    (firstOrNull { it.id == lastTaskEmployeeId } ?: firstOrNull())?.id.orEmpty()
+
 fun List<Employee>.withObservedAdditions(previous: List<Employee>?, now: Long): List<Employee> {
     val priorById = previous.orEmpty().associateBy { it.id }
     return map { employee ->
@@ -55,6 +59,18 @@ data class Conversation(
     val date: String = "",
     val agentId: String = "",
     val task: Boolean = false,
+    val projectId: String = "",
+    val runStatus: ConversationRunStatus? = null,
+    val notificationsMuted: Boolean = false,
+)
+data class ConversationRunStatus(
+    val topic: String,
+    val runId: String,
+    val state: String,
+    val summary: String,
+    val error: String,
+    val sourceId: String,
+    val updatedAt: Long,
 )
 data class Project(val id: String, val name: String)
 data class Workspace(val employees: List<Employee> = emptyList(), val conversations: List<Conversation> = emptyList(), val projects: List<Project> = emptyList())
@@ -62,11 +78,12 @@ interface WorkspaceRepository {
     suspend fun login(server: ServerAddress, account: String, password: String): Session
     suspend fun restore(session: Session): Session
     suspend fun workspace(session: Session): Workspace
+    suspend fun conversations(session: Session): List<Conversation> = workspace(session).conversations
     suspend fun renameConversation(session: Session, topicId: String, name: String)
     suspend fun resource(session: Session, path: String, query: Map<String, String> = emptyMap(), method: String = "GET", body: String? = null): String {
         error("调试预览不连接业务接口，请使用真实账号登录。")
     }
-    suspend fun upload(session: Session, bytes: ByteArray, name: String, mime: String): String {
+    suspend fun upload(session: Session, file: java.io.File, name: String, mime: String, type: String = if (mime.startsWith("image/")) "image" else "file"): String {
         error("调试预览不上传文件，请使用真实账号登录。")
     }
 }

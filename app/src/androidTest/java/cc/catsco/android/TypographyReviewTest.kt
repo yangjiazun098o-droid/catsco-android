@@ -157,7 +157,7 @@ class TypographyReviewTest {
         routes.forEachIndexed { index, route ->
             compose.runOnIdle { page = route }
             compose.waitForIdle()
-            val title = when (route) { "home" -> "新任务"; "settings" -> "设置"; "skills" -> "应用"; "agents" -> "员工"; else -> moduleTitle(route) }
+            val title = when (route) { "home" -> "新任务"; "settings" -> "设置"; "skills" -> "应用"; else -> moduleTitle(route) }
             compose.onAllNodesWithText(title, useUnmergedTree = true).onFirst().assertIsDisplayed()
             capture("$label-${index.toString().padStart(2, '0')}")
             if (route in setOf("settings", "model/9", "agent/9", "relay-key", "commercial")) {

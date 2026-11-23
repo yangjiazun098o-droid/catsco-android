@@ -4,6 +4,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EmployeeOrderTest {
+    @Test fun lastSuccessfulEmployeeTakesPriorityRegardlessOfHosting() {
+        val agents = listOf(
+            Employee("default", "Owned cloud", owner = true, cloud = true),
+            Employee("last-cloud", "Last cloud", cloud = true),
+            Employee("local", "Local", cloud = false),
+            Employee("unknown", "Unspecified hosting"),
+        )
+        assertEquals("last-cloud", agents.defaultTaskEmployeeId("last-cloud"))
+        assertEquals("local", agents.defaultTaskEmployeeId("local"))
+        assertEquals("unknown", agents.defaultTaskEmployeeId("unknown"))
+        assertEquals("default", agents.defaultTaskEmployeeId("missing"))
+        assertEquals("default", agents.defaultTaskEmployeeId(""))
+        assertEquals("", emptyList<Employee>().defaultTaskEmployeeId("missing"))
+    }
+
     @Test fun cloudThenOwnershipThenRecentTime() {
         val agents = listOf(
             Employee("local-owner", "Mine", owner = true, cloud = false, createdAt = 500),

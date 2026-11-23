@@ -7,6 +7,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MessagePresentationTest {
+    @Test fun streamingUpdatesReuseHistoryAndInvalidateAnEditedQuote() {
+        val history = (1L..250L).map { id ->
+            val assistant = id % 2 == 0L
+            cc.catsco.core.ChatMessage(id, if (assistant) "9" else "1", "", "正文 $id",
+                turnId = if (assistant) "run-$id" else "", raw = if (id == 250L) """{"reply_to":1}""" else "")
+        }
+        val cache = MessagePresentationCache()
+        fun render(messages: List<cc.catsco.core.ChatMessage>) = projectMessages(messages, "1", setOf("9"), emptyMap(), emptySet(), cache)
+        val original = render(history)
+        val updated = render(history.dropLast(1) + history.last().copy(text = "更新的回复"))
+        assertEquals(249, original.zip(updated).count { (before, after) -> before === after })
+        val revised = render(listOf(history.first().copy(text = "修订后的原文")) + history.drop(1))
+        assertEquals("修订后的原文", revised.last().quote?.text)
+    }
+
     private fun message(raw: String) = chatMessage(JSONObject(raw))
     private fun project(vararg raw: String) = presentMessages(raw.map(::message), "1", setOf("9", "10"))
 

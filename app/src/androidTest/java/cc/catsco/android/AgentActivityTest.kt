@@ -13,6 +13,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cc.catsco.android.data.MessageTurn
+import cc.catsco.android.data.presentMessages
 import cc.catsco.android.ui.*
 import cc.catsco.core.ChatMessage
 import cc.catsco.core.Conversation
@@ -90,6 +91,38 @@ class AgentActivityTest {
         assertNotEquals(pending.last().key, next.last().key)
     }
 
+    @Test fun aFollowupKeepsTheExistingLoadingSlotUntilItsReplyArrives() {
+        val user = turn.copy(key = "question", senderId = "1", assistant = false, messageId = 1, text = listOf("问题"))
+        val followup = user.copy(key = "followup", messageId = 2, text = listOf("补充"))
+        val pending = conversationDisplayTurns(listOf(user), true, "9", "Agent").last()
+        val afterSend = conversationDisplayTurns(listOf(user, followup), true, "9", "Agent", followupMessageIds = setOf(2))
+        assertEquals(listOf(user.key, pending.key, followup.key), afterSend.map { it.key })
+
+        val reply = turn.copy(key = "first-stream", streaming = true, text = listOf("当前回复"))
+        val afterReply = conversationDisplayTurns(listOf(user, followup, reply), true, "9", "Agent", followupMessageIds = setOf(2))
+        assertEquals(listOf(user.key, followup.key, pending.key), afterReply.map { it.key })
+        val afterAnotherFollowup = conversationDisplayTurns(listOf(user, reply, followup), true, "9", "Agent", followupMessageIds = setOf(2))
+        assertEquals(listOf(user.key, pending.key, followup.key), afterAnotherFollowup.map { it.key })
+        assertEquals(reply.text, afterAnotherFollowup.single { it.assistant }.text)
+    }
+
+    @Test fun explicitRunIdentityKeepsExecutionTogetherAcrossFollowups() {
+        val first = ChatMessage(1, "1", "User", "问题")
+        val progress = ChatMessage(2, "9", "Agent", "正在核对", kind = "assistant_text", turnId = "run-a")
+        val followup = ChatMessage(3, "1", "User", "补充", raw = """{"metadata":{"task_followup":true}}""")
+        val result = ChatMessage(4, "9", "Agent", "结果", turnId = "run-a")
+        val next = ChatMessage(5, "9", "Agent", "处理补充内容", turnId = "run-b")
+        val turns = presentMessages(listOf(first, progress, followup, result, next), "1", setOf("9"), followupMessageIds = setOf(3))
+
+        val afterReload = presentMessages(listOf(first, progress, followup, result, next), "1", setOf("9"))
+        assertEquals(turns, afterReload)
+        assertTrue(afterReload.single { it.messageId == 3L }.followup)
+        assertEquals(listOf(1L, 4L, 3L, 5L), turns.map { it.messageId })
+        assertEquals(listOf("正在核对"), turns[1].progress)
+        assertEquals(listOf("结果"), turns[1].text)
+        assertEquals(listOf("处理补充内容"), turns[3].text)
+    }
+
     @Test fun bubbleOpensOnceFromItsTopLeftAndStreamingThenGrowsNaturally() {
         var loading by mutableStateOf(true)
         var bodyHeight by mutableStateOf(100)
@@ -141,7 +174,7 @@ class AgentActivityTest {
         compose.mainClock.autoAdvance = true
     }
 
-    @Test fun loadingBubbleSitsBelowNameAndPrimaryButtonStopsBeforeSending() {
+    @Test fun loadingBubbleSitsBelowNameAndStopKeepsTheDraft() {
         var running by mutableStateOf(true)
         var stopping by mutableStateOf(false)
         var stopped = 0
@@ -153,19 +186,21 @@ class AgentActivityTest {
                         if (running) AgentPendingReply("自迭代", stopping)
                         Spacer(Modifier.weight(1f))
                         Text("草稿保留")
-                        ComposerSendButton(running, stopping, true, { sent++ }, { stopped++; stopping = true })
+                        ComposerSendButton(running, stopping, true, { sent++ }, { stopped++; stopping = true }, hasDraft = true)
                     }
                 }
             }
         }
         val name = compose.onNodeWithText("自迭代").fetchSemanticsNode().boundsInRoot
-        val status = compose.onNodeWithText("正在思考").fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithText("正在思考").assertDoesNotExist()
+        compose.onNodeWithText("自迭代").assert(
+            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "正在思考")
+        )
         val bubble = compose.onNodeWithTag("agent-loading-bubble")
         bubble.assertWidthIsEqualTo(68.dp).assertHeightIsEqualTo(42.dp)
         val bounds = bubble.fetchSemanticsNode().boundsInRoot
         assertEquals(name.left, bounds.left, 1f)
         assertTrue(bounds.top > name.bottom)
-        assertEquals(with(compose.density) { 11.dp.toPx() }, status.left - name.right, 1f)
         compose.onNodeWithContentDescription("停止生成").performClick()
         compose.onNodeWithContentDescription("正在停止").assertIsNotEnabled()
         compose.onNodeWithTag("agent-loading-bubble").assertDoesNotExist()

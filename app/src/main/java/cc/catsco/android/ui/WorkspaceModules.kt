@@ -1,9 +1,11 @@
 package cc.catsco.android.ui
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -12,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +25,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -42,6 +47,7 @@ import cc.catsco.android.*
 import cc.catsco.android.R
 import cc.catsco.android.data.*
 import cc.catsco.core.Employee
+import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -56,16 +62,22 @@ fun moduleTitle(page: String): String = when {
     page.startsWith("skill/") -> "技能详情"
     page.startsWith("agent/") -> "员工配置"
     page.startsWith("model/") -> "模型配置"
+    page.startsWith("task-outputs/") -> "文件与应用"
     page.startsWith("files/") -> "云端文件"
     page.startsWith("topic-files/") -> "对话文件"
     page.startsWith("select-device/") -> "选择电脑"
-    else -> mapOf("apps" to "应用", "skills" to "SkillHub", "devices" to "我的电脑", "device-audit" to "连接记录", "desktop-connect" to "连接电脑", "profile" to "个人资料", "appearance" to "外观", "usage" to "模型用量", "commercial" to "套餐与权益", "redeem" to "兑换邀请码", "orders" to "订单记录", "relay-key" to "模型访问凭证", "files" to "云端文件", "agents" to "员工管理", "contacts" to "联系人与群组", "people-search" to "添加好友", "message-search" to "搜索消息", "service-agents" to "定制 Agent", "cloud-workers" to "云托管", "notifications" to "消息通知", "surfaces" to "桌面组件", "offline" to "缓存与草稿", "feedback" to "反馈", "server" to "服务器")[page] ?: "CatsCo"
+    page == "appearance" -> PersonalizationTitle
+    else -> mapOf("apps" to "应用", "skills" to "SkillHub", "devices" to "我的电脑", "device-audit" to "连接记录", "desktop-connect" to "连接电脑", "profile" to "个人资料", "usage" to "模型用量", "commercial" to "套餐与权益", "redeem" to "兑换邀请码", "orders" to "订单记录", "relay-key" to "模型访问凭证", "files" to "云端文件", "agents" to "员工管理", "contacts" to "联系人与群组", "people-search" to "添加好友", "message-search" to "搜索消息", "service-agents" to "定制 Agent", "cloud-workers" to "云托管", "notifications" to "消息通知", "surfaces" to "桌面组件", "offline" to "缓存与草稿", "feedback" to "反馈", "server" to "服务器")[page] ?: "CatsCo"
 }
 
 @Composable
 fun WorkspaceModuleScreen(state: WorkspaceState, model: WorkspaceViewModel, initialSearch: String = "") {
     val page = state.page
     val value = state.resource.value
+    if (page.startsWith("task-outputs/")) {
+        TaskOutputsScreen(state, model)
+        return
+    }
     if (page == "apps" || page == "skills" || page.startsWith("agent-apps/")) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) {
@@ -100,27 +112,12 @@ fun WorkspaceModuleScreen(state: WorkspaceState, model: WorkspaceViewModel, init
                     action = { CatsCoButton(onClick = { model.navigate("agents") }) { Text("管理员工") } })
             }
             page.startsWith("files/") || page.startsWith("topic-files/") -> Records(value.objects("artifacts", "files", "items"), R.drawable.e_file,
+                pagination = state.resource, loadMore = model::loadMoreRecords,
                 header = if (page.startsWith("files/")) ({ ModuleChoice("Agent", page.removePrefix("files/"),
                     state.workspace.employees.map { it.id to it.name }, model::selectFileAgent) }) else null,
-                empty = "还没有文件", emptyDescription = "此范围内的 Agent 生成或接收文件后，会在这里显示。", detail = ::fileRecordDescription,
+                empty = "还没有文件", emptyDescription = "此范围内的 Agent 生成或接收文件后，会在这里显示。", detail = { fileDescription(it, state) },
                 onClick = { model.openAttachment(attachment(it.optJSONObject("attachment") ?: it)) })
-            page == "devices" && value.objects("devices").isEmpty() -> ModuleForm {
-                ModuleSection {
-                    ModuleEmpty("还没有连接电脑", "在电脑上打开 CatsCo Runtime，连接并授权后，员工可以在这台电脑上执行任务。", icon = R.drawable.e_computer)
-                }
-                SettingsGroup("电脑连接", listOf(
-                    SettingsEntry("连接电脑", R.drawable.e_add, action = "desktop-connect"),
-                    SettingsEntry("连接记录", R.drawable.e_refresh, action = "device-audit"),
-                    SettingsEntry("云托管", R.drawable.e_cloud, action = "cloud-workers"),
-                ), model::navigate)
-            }
-            page == "devices" -> Records(value.objects("devices"), R.drawable.e_computer,
-                header = { Row { if (value.objects("devices").isNotEmpty()) CatsCoSecondaryButton(onClick = { model.navigate("desktop-connect") }) { Text("连接电脑") }; CatsCoSecondaryButton(onClick = { model.navigate("device-audit") }) { Text("连接记录") }; CatsCoSecondaryButton(onClick = { model.navigate("cloud-workers") }) { Text("云托管") } } },
-                empty = "还没有连接电脑", emptyDescription = "连接电脑后，Agent 可以在已授权的电脑上执行任务。", emptyAction = { CatsCoButton(onClick = { model.navigate("desktop-connect") }) { Text("连接电脑") } }, detail = { if (it.optBoolean("routable")) "在线 · 可以接收任务" else it.first("unavailableReason").ifBlank { "离线或暂不可用" } },
-                trailing = { device -> ConfirmAction("解除连接", state.busy) { model.action { session ->
-                    model.request(session, "/api/devices/${encodeSegment(device.first("deviceId", "device_id", "id"))}", method = "DELETE")
-                    model.loadResource()
-                } } })
+            page == "devices" -> ComputerConnections(state, model, value.objects("devices"))
             page.startsWith("select-device/") -> Records(value.objects("devices"), R.drawable.e_computer, empty = "没有可供此任务使用的电脑", detail = { if (it.optBoolean("routable")) "在线" else "不可用" },
                 trailing = { device ->
                     val id = device.first("deviceId", "device_id")
@@ -131,22 +128,17 @@ fun WorkspaceModuleScreen(state: WorkspaceState, model: WorkspaceViewModel, init
                         model.loadResource()
                     } }) { Text(if (value.optString("selected_device_id") == id) "已选择" else "选择") }
                 })
-            page == "desktop-connect" -> DesktopConnect(state, model)
-            page == "device-audit" -> Records(value.objects("events", "records", "entries", "audit", "items"), R.drawable.e_computer, empty = "暂无连接记录", detail = { listOf(displayModuleStatus(it.first("description", "action")), displayModuleDate(it.first("created_at", "timestamp"))).filter(String::isNotBlank).joinToString(" · ") })
-            page == "profile" -> ProfileEditor(state, model)
-            page == "appearance" -> ModuleForm {
-                ModuleSection("应用外观") {
-                listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色").forEach { (mode, label) ->
-                    Row(Modifier.fillMaxWidth().clickable { model.appearance(mode) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(state.appearance == mode, { model.appearance(mode) }); Text(label, fontSize = 16.sp)
-                    }
-                }
-                }
+            page == "desktop-connect" -> ModuleForm {
+                ModuleSection("连接电脑") { DesktopConnect(state, model) }
             }
+            page == "device-audit" -> Records(computerAuditRecords(value), R.drawable.e_computer, empty = "暂无连接记录", detail = ::computerAuditDetail)
+            page == "profile" -> ProfileEditor(state, model)
             page == "usage" -> UsageDetails(value, model)
             page == "commercial" -> CommercialDetails(state, model)
             page == "redeem" -> ModuleForm { InviteRedemption(state, model) }
-            page == "orders" -> Records(value.objects("orders", "items"), R.drawable.e_file, empty = "暂无订单", detail = { listOf(displayOrderStatus(it.first("status", "state")), displayModuleDate(it.first("created_at")), orderAmount(it)).filter(String::isNotBlank).joinToString(" · ") })
+            page == "orders" -> Records(value.objects("orders", "items"), R.drawable.e_file, empty = "暂无订单",
+                pagination = state.resource, loadMore = model::loadMoreRecords,
+                detail = { listOf(displayOrderStatus(it.first("status", "state")), displayModuleDate(it.first("created_at")), orderAmount(it)).filter(String::isNotBlank).joinToString(" · ") })
             page == "feedback" -> FeedbackEditor(state, model)
             page == "server" -> ModuleForm {
                 ModuleSection {
@@ -205,9 +197,70 @@ fun WorkspaceModuleScreen(state: WorkspaceState, model: WorkspaceViewModel, init
                     model.loadResource()
                 } }) { Text(if (enabled) "移出清单" else "添加") }
             })
-            page == "cloud-workers" -> Records(value.objects("workers", "items", "agents"), R.drawable.e_cloud, empty = "还没有云托管员工", emptyDescription = "已开通的云端托管员工会显示在这里。", detail = { displayModuleStatus(it.first("display_state", "status", "state", "description")) })
+            page == "cloud-workers" -> Records(cloudWorkerRecords(value), R.drawable.e_cloud, empty = "还没有云托管员工", emptyDescription = "已开通的云端托管员工会显示在这里。", detail = ::cloudWorkerDetail)
         }
     }
+}
+
+@Composable
+internal fun TaskOutputsTabs(apps: Boolean, onSelect: (Boolean) -> Unit) {
+    CatsCoSegmentedControl(
+        listOf("files" to "文件", "apps" to "应用"), if (apps) "apps" else "files",
+        { onSelect(it == "apps") },
+        Modifier.padding(horizontal = 16.dp, vertical = 8.dp), "task-outputs-tab",
+    )
+}
+
+@Composable
+private fun TaskOutputsScreen(state: WorkspaceState, model: WorkspaceViewModel) {
+    val page = state.page
+    val topic = taskOutputTopic(page)
+    val selectedAgent = if (topic == null) page.substringAfterLast('/') else model.agentFor(topic)
+    val agentName = state.workspace.employees.find { it.id == selectedAgent }?.name.orEmpty()
+    val apps = page.startsWith("task-outputs/apps/")
+    val resource = state.resource
+    Column(Modifier.fillMaxSize()) {
+        if (topic == null && state.workspace.employees.isNotEmpty()) {
+            Box(Modifier.padding(horizontal = 16.dp)) {
+                LibraryEmployeeMenu(
+                    agentName.ifBlank { "选择 Agent" }, state.workspace.employees.map { it.id to it.name },
+                    selectedAgent, model::selectTaskOutputAgent, "task-outputs-agent",
+                )
+            }
+        } else if (topic != null) {
+            val scope = when {
+                !apps -> "当前任务的文件"
+                agentName.isNotBlank() -> "$agentName 的应用"
+                selectedAgent.isNotBlank() -> "任务关联 Agent 的应用"
+                else -> ""
+            }
+            if (scope.isNotBlank()) {
+                Text(scope, Modifier.padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Box(Modifier.weight(1f)) {
+            when {
+                apps -> ApplicationsScreen(state, model, outputAgent = selectedAgent, sourceTopic = topic)
+                resource.loading && !resource.loaded -> ModuleLoading()
+                resource.error != null -> Box(Modifier.padding(16.dp)) {
+                    ModuleError(resource.error, resource.errorStatus, { model.loadResource() }, model::back)
+                }
+                else -> Records(
+                    resource.value.objects("artifacts", "files", "items"), R.drawable.e_file,
+                    pagination = resource.takeIf { topic != null }, loadMore = model::loadMoreRecords,
+                    empty = if (topic == null && selectedAgent.isBlank()) "暂无可查看的 Agent" else "还没有文件",
+                    detail = { fileDescription(it, state) },
+                    onClick = { model.openAttachment(attachment(it.optJSONObject("attachment") ?: it)) },
+                )
+            }
+        }
+    }
+}
+
+private fun fileDescription(record: JSONObject, state: WorkspaceState): String {
+    val failure = state.attachmentFailure ?: return fileRecordDescription(record)
+    return if (failure.first == attachment(record.optJSONObject("attachment") ?: record).url) failure.second else fileRecordDescription(record)
 }
 
 @Composable
@@ -239,10 +292,13 @@ private fun Records(
     bottomInset: androidx.compose.ui.unit.Dp = 16.dp,
     leading: (@Composable (JSONObject) -> Unit)? = null,
     list: LazyListState = rememberLazyListState(),
+    pagination: ResourceState? = null,
+    loadMore: (() -> Unit)? = null,
 ) {
+    val hasMore = pagination?.value?.optBoolean("has_more") == true && loadMore != null
     LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = bottomInset)) {
         header?.let { content -> item { Column(Modifier.padding(bottom = 12.dp)) { content() } } }
-        if (records.isEmpty() && showEmpty) item {
+        if (records.isEmpty() && showEmpty && !hasMore) item {
             ModuleSection { ModuleEmpty(empty, emptyDescription, emptyAction, icon = icon) }
         }
         itemsIndexed(records) { index, record ->
@@ -270,6 +326,18 @@ private fun Records(
                     }
                     if (index < records.lastIndex) HorizontalDivider(Modifier.padding(start = if (leading == null) 53.dp else 70.dp, end = 16.dp), thickness = .5.dp,
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .7f))
+                }
+            }
+        }
+        if (hasMore) item(key = "next-page") {
+            Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+                if (pagination.moreError != null) {
+                    TextButton(onClick = loadMore) { Text("${pagination.moreError}，重试") }
+                } else {
+                    LaunchedEffect(pagination.value, pagination.loading) {
+                        if (!pagination.loading) loadMore()
+                    }
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 }
             }
         }
@@ -333,15 +401,42 @@ private fun ProfileEditor(state: WorkspaceState, model: WorkspaceViewModel) {
     val value = state.resource.value
     val draft = rememberModuleDraft(model, state.page, mapOf("name" to value.first("display_name", "name").ifBlank { state.session?.name.orEmpty() }))
     val name = draft["name"]
+    var photo by rememberSaveable(state.session?.server, state.session?.userId) { mutableStateOf<Uri?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { selected ->
+        if (selected != null) photo = selected
+    }
+    val editable = state.session != null && !state.preview && !state.busy && !state.resource.loading && state.resource.error == null
     ModuleForm {
+        Column(
+            Modifier.align(Alignment.CenterHorizontally)
+                .clip(RoundedCornerShape(12.dp))
+                .catsCoActionClickable(enabled = editable, shape = RoundedCornerShape(12.dp)) {
+                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(Modifier.size(88.dp).clip(CircleShape)) {
+                CatsCoAccountAvatar(state.session, model.accountImages, Modifier.fillMaxSize())
+                photo?.let {
+                    AsyncImage(it, contentDescription = null, imageLoader = model.accountImages,
+                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+            }
+            Text("更换头像", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         ModuleSection {
             ModuleTextField(name, { draft.update("name", it) }, Modifier.fillMaxWidth(), label = { Text("显示名称") }, singleLine = true,
                 errorMessage = requiredFieldError(name, "显示名称"))
             ModuleDraftStatus(draft)
             CatsCoButton(onClick = {
                 val sent = draft.snapshot()
-                model.saveProfile(name, value.optString("avatar_url")) { draft.accept(sent) }
-            }, modifier = Modifier.fillMaxWidth(), enabled = !state.busy && !state.resource.loading && state.resource.error == null && name.isNotBlank() && draft.dirty) { Text("保存资料") }
+                model.saveProfile(name, photo) {
+                    draft.accept(sent)
+                    photo = null
+                }
+            }, modifier = Modifier.fillMaxWidth(), enabled = editable && name.isNotBlank() && (draft.dirty || photo != null)) { Text("保存资料") }
         }
         ModuleSection("账号信息", spacing = 0.dp) {
             ModuleInfoRows(listOf("用户名" to value.first("username"), "邮箱" to value.first("email"),
@@ -352,20 +447,48 @@ private fun ProfileEditor(state: WorkspaceState, model: WorkspaceViewModel) {
 
 @Composable
 private fun FeedbackEditor(state: WorkspaceState, model: WorkspaceViewModel) {
-    val draft = rememberModuleDraft(model, state.page, mapOf("description" to ""))
+    val draft = rememberModuleDraft(model, state.page, mapOf("description" to "", "images" to ""))
     val description = draft["description"]
+    val images = remember(draft["images"]) { JSONArray(draft["images"].ifBlank { "[]" }) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null && uri.scheme == "content" && images.length() < 5) {
+            model.action { session ->
+                val uploaded = model.uploadFeedbackImage(session, uri)
+                val updated = JSONArray(draft["images"].ifBlank { "[]" })
+                if (updated.length() < 5) draft.update("images", updated.put(uploaded).toString())
+            }
+        }
+    }
     ModuleForm {
         ModuleSection {
             ModuleTextField(description, { draft.update("description", it) }, Modifier.fillMaxWidth().heightIn(min = 180.dp),
-                label = { Text("问题或建议") }, placeholder = { Text("发生了什么？你希望怎样改进？") }, minLines = 5, errorMessage = requiredFieldError(description, "问题描述"))
+                label = { Text("问题或建议") }, placeholder = { Text("描述问题或上传截图") }, minLines = 5)
+            for (index in 0 until images.length()) {
+                val file = images.getJSONObject(index)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(file.optString("name", "截图"), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    TextButton(onClick = {
+                        val updated = JSONArray(draft["images"])
+                        updated.remove(index)
+                        draft.update("images", if (updated.length() == 0) "" else updated.toString())
+                    }, enabled = !state.busy) { Text("移除") }
+                }
+            }
+            if (images.length() < 5) CatsCoSecondaryButton(
+                onClick = { picker.launch(arrayOf("image/png", "image/jpeg", "image/gif", "image/webp")) },
+                enabled = !state.busy,
+            ) { Text("上传截图") }
             ModuleDraftStatus(draft)
             CatsCoButton(onClick = {
                 model.action { session ->
-                    model.request(session, "/api/feedback", method = "POST", body = JSONObject().put("description", description).put("category", "suggestion").put("user_agent", "CatsCo Android ${BuildConfig.VERSION_NAME}"))
+                    model.request(session, "/api/feedback", method = "POST", body = JSONObject()
+                        .put("description", description.trim().ifEmpty { "截图反馈" }).put("attachments", images)
+                        .put("category", "suggestion").put("user_agent", "CatsCo Android ${BuildConfig.VERSION_NAME}"))
                     if (draft["description"] == description) draft.update("description", "")
+                    if (draft["images"] == images.toString()) draft.update("images", "")
                     model.notice("反馈已发送，感谢你的建议。")
                 }
-            }, modifier = Modifier.fillMaxWidth(), enabled = description.isNotBlank() && !state.busy) { Text("发送反馈") }
+            }, modifier = Modifier.fillMaxWidth(), enabled = (description.isNotBlank() || images.length() > 0) && !state.busy) { Text("发送反馈") }
         }
     }
 }
@@ -404,7 +527,7 @@ private fun NotificationPreferences(state: WorkspaceState) {
             }
         }
         ModuleSection("任务更新") {
-            Text("任务状态在打开 CatsCo 后同步。后台任务完成提醒需要推送服务支持。", fontSize = 14.sp,
+            Text("打开 CatsCo 时同步任务状态。允许系统通知后，也会在后台定期检查，提醒时间取决于网络和系统省电设置。", fontSize = 14.sp,
                 lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -521,8 +644,105 @@ private fun RelayCredentials(state: WorkspaceState, model: WorkspaceViewModel) {
     }
 }
 
+private fun computerAuditRecords(value: JSONObject) = value.objects("events", "records", "entries", "audit", "items")
+
+private fun computerAuditDetail(value: JSONObject) =
+    listOf(displayModuleStatus(value.first("description", "action")), displayModuleDate(value.first("created_at", "timestamp")))
+        .filter(String::isNotBlank).joinToString(" · ")
+
+private fun cloudWorkerRecords(value: JSONObject) = value.objects("workers", "items", "agents")
+
+private fun cloudWorkerDetail(value: JSONObject) =
+    displayModuleStatus(value.first("display_state", "status", "state", "description"))
+
 @Composable
-private fun DesktopConnect(state: WorkspaceState, model: WorkspaceViewModel) {
+private fun ComputerConnections(state: WorkspaceState, model: WorkspaceViewModel, devices: List<JSONObject>) {
+    var openPanel by rememberSaveable(state.session?.userId, state.session?.server) { mutableStateOf<String?>(null) }
+    Records(
+        records = devices,
+        icon = R.drawable.e_computer,
+        showEmpty = false,
+        header = {
+            Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                if (devices.isEmpty()) ModuleSection {
+                    ModuleEmpty("还没有连接电脑", "在电脑上打开 CatsCo Runtime，连接并授权后，员工可以在这台电脑上执行任务。", icon = R.drawable.e_computer)
+                }
+                ModuleSection("电脑连接", spacing = 0.dp, contentPadding = PaddingValues(0.dp)) {
+                    val panels = listOf("连接电脑" to R.drawable.e_add, "连接记录" to R.drawable.e_refresh, "云托管" to R.drawable.e_cloud)
+                    panels.forEachIndexed { index, (label, icon) ->
+                        val expanded = openPanel == label
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = CatsCoMobileSpec.settingsRowHeight)
+                                .catsCoDisclosureClickable(expanded) { openPanel = if (expanded) null else label }
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(CatsCoMobileSpec.settingsLabelGap),
+                        ) {
+                            Icon(painterResource(icon), null, Modifier.size(CatsCoMobileSpec.settingsIconSize))
+                            Text(label, Modifier.weight(1f), fontSize = CatsCoMobileSpec.settingsText)
+                            CatsCoDisclosureChevron(expanded)
+                        }
+                        val detailInsets = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                        if (index == 0) {
+                            DesktopConnect(state, model, visible = expanded, modifier = detailInsets, onConnected = { model.loadResource() })
+                        } else CatsCoSectionReveal(expanded) {
+                            Column(detailInsets, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                ComputerDetails(state, model, audit = index == 1)
+                            }
+                        }
+                        if (index < panels.lastIndex) HorizontalDivider(Modifier.padding(start = 53.dp, end = 16.dp),
+                            thickness = .5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+                }
+            }
+        },
+        detail = { if (it.optBoolean("routable")) "在线 · 可以接收任务" else it.first("unavailableReason").ifBlank { "离线或暂不可用" } },
+        trailing = { device -> ConfirmAction("解除连接", state.busy) { model.action { session ->
+            model.request(session, "/api/devices/${encodeSegment(device.first("deviceId", "device_id", "id"))}", method = "DELETE")
+            model.loadResource()
+        } } },
+    )
+}
+
+@Composable
+private fun ComputerDetails(state: WorkspaceState, model: WorkspaceViewModel, audit: Boolean) {
+    var resource by remember { mutableStateOf(ResourceState(loading = true)) }
+    var attempt by remember { mutableIntStateOf(0) }
+    LaunchedEffect(state.session, audit, attempt) {
+        val session = state.session ?: return@LaunchedEffect
+        resource = ResourceState(loading = true)
+        try {
+            resource = ResourceState(value = model.loadComputerDetails(session, audit), loaded = true)
+        } catch (canceled: kotlinx.coroutines.CancellationException) {
+            throw canceled
+        } catch (_: Exception) {
+            resource = ResourceState(error = "读取失败，请重试。")
+        }
+    }
+    when {
+        resource.loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+        resource.error != null -> {
+            Text(resource.error.orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            CatsCoSecondaryButton(onClick = { attempt++ }) { Text("重试") }
+        }
+        else -> {
+            val records = if (audit) computerAuditRecords(resource.value) else cloudWorkerRecords(resource.value)
+            if (records.isEmpty()) Text(if (audit) "暂无连接记录" else "还没有云托管员工",
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            records.forEach { record ->
+                val detail = if (audit) computerAuditDetail(record) else cloudWorkerDetail(record)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(recordName(record), fontSize = 15.sp)
+                    if (detail.isNotBlank()) Text(detail, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DesktopConnect(state: WorkspaceState, model: WorkspaceViewModel, visible: Boolean = true,
+    modifier: Modifier = Modifier.fillMaxWidth(), onConnected: () -> Unit = {}) {
     var connection by remember { mutableStateOf(JSONObject()) }
     var status by remember { mutableStateOf("") }
     LaunchedEffect(connection.optString("code")) {
@@ -533,18 +753,28 @@ private fun DesktopConnect(state: WorkspaceState, model: WorkspaceViewModel) {
             try {
                 val result = model.request(session, "/api/desktop-connect/status", mapOf("code" to code))
                 status = result.first("status", "state")
-                if (status in setOf("connected", "approved", "expired", "cancelled")) return@LaunchedEffect
+                if (status == "connected" || status == "approved") {
+                    onConnected()
+                    return@LaunchedEffect
+                }
+                if (status == "expired" || status == "cancelled") return@LaunchedEffect
             } catch (error: kotlinx.coroutines.CancellationException) { throw error }
             catch (error: Exception) { status = error.message.orEmpty(); return@LaunchedEffect }
         }
     }
-    ModuleForm {
-        ModuleSection("连接电脑") {
+    CatsCoSectionReveal(visible) { Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("在电脑上打开 CatsCo Runtime，输入连接码完成连接。", fontSize = 15.sp)
-        Field("连接码", connection.first("code")); Field("状态", displayModuleStatus(status))
-        CatsCoButton(onClick = { model.action { session -> connection = model.request(session, "/api/desktop-connect/session", method = "POST", body = JSONObject()); status = "等待电脑连接" } }, enabled = !state.busy) { Text("生成连接码") }
-        }
-    }
+        Field("连接码", connection.first("code"))
+        Field("状态", displayModuleStatus(status))
+        CatsCoButton(
+            onClick = { model.action { session ->
+                connection = model.request(session, "/api/desktop-connect/session", method = "POST", body = JSONObject())
+                status = "等待电脑连接"
+            } },
+            modifier = Modifier.align(Alignment.End),
+            enabled = !state.busy,
+        ) { Text("生成连接码") }
+    } }
 }
 
 @Composable
@@ -570,27 +800,46 @@ private fun SkillHub(state: WorkspaceState, model: WorkspaceViewModel) {
             error = if (errorStatus == 403) "此 Agent 的技能配置暂不可查看。" else "技能配置读取失败。"
         }
     }
-    val catalogue = state.resource.value.objects("skills", "items")
-    val configuredIds = configuration?.objects("skills")?.map { it.first("skillId", "skill_id") }.orEmpty().toSet()
-    val visibleSkills = if (catalogueScope == "added") catalogue.filter { it.first("skillId", "skill_id", "id") in configuredIds } else catalogue
+    val catalogue = remember(state.resource.value) { state.resource.value.objects("skills", "items") }
+    val references = remember(configuration) {
+        configuration?.objects("skills").orEmpty().associateBy { it.first("skillId", "skill_id") }
+    }
+    val visibleSkills = remember(catalogue, catalogueScope, references) {
+        if (catalogueScope == "added") catalogue.filter { it.first("skillId", "skill_id", "id") in references } else catalogue
+    }
     val readingAddedSkills = catalogueScope == "added" && configuration == null && error == null
     var query by rememberSaveable(state.session?.userId, state.session?.server) { mutableStateOf(model.moduleQuery("skills")) }
     LaunchedEffect(query) {
         model.saveModuleQuery("skills", query)
-        delay(350)
-        model.loadResource(query)
+        if (query != state.resource.query) {
+            delay(350)
+            model.loadResource(query)
+        }
     }
     val backdrop = dev.chrisbanes.haze.rememberHazeState()
     val list = rememberLazyListState()
-    LaunchedEffect(query, selected, catalogueScope) { list.scrollToItem(0) }
+    val filters = Triple(query, selected, catalogueScope)
+    var lastFilters by remember { mutableStateOf(filters) }
+    LaunchedEffect(filters) {
+        if (filters != lastFilters) {
+            lastFilters = filters
+            list.scrollToItem(0)
+        }
+    }
     Column(Modifier.fillMaxSize().imePadding()) {
-        LibraryEmployeeSelector(owners.find { it.id == selected }?.name ?: "暂无员工", owners.map { it.id to it.name },
-            selected, model::selectSkillTarget, "skill-agent")
         CatsCoSidebarSearchField(query, { query = it }, backdrop,
             Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("skill-search"), "搜索技能", glass = false)
-        CatsCoSegmentedControl(listOf("all" to "全部", "added" to "已添加"), catalogueScope,
-            { catalogueScope = it }, Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("skill-scope"),
-            "skill-filter", enabled = configuration != null)
+        LibraryToolbar(
+            section = "skill",
+            employeeName = owners.find { it.id == selected }?.name ?: "暂无员工",
+            employees = owners.map { it.id to it.name },
+            selectedEmployee = selected,
+            onEmployeeSelected = model::selectSkillTarget,
+            scopes = listOf("all" to "全部", "added" to "已添加"),
+            scope = catalogueScope,
+            onScopeSelected = { catalogueScope = it },
+            unavailableScope = if (configuration == null) "added" else null,
+        )
         if (owners.isEmpty()) Text("创建自己的员工后，可以为它添加技能。", Modifier.padding(horizontal = 20.dp),
             fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         error?.let { message ->
@@ -606,7 +855,7 @@ private fun SkillHub(state: WorkspaceState, model: WorkspaceViewModel) {
                 else CatsCoSecondaryButton(onClick = { model.loadResource(query) }, enabled = !state.resource.loading) { Text("重试") }
             }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().hazeSource(backdrop).testTag("skill-list"), state = list,
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("skill-list"), state = list,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)) {
             if ((state.resource.loading && catalogue.isEmpty()) || readingAddedSkills) item { ModuleLoading() }
             if (visibleSkills.isEmpty() && !state.resource.loading && state.resource.error == null &&
@@ -618,17 +867,17 @@ private fun SkillHub(state: WorkspaceState, model: WorkspaceViewModel) {
                 })
             }
             items(visibleSkills) { skill ->
-                val status = when {
-                    selected.isBlank() -> ""
-                    error != null -> "配置状态暂不可读取"
-                    configuration == null -> "正在读取配置…"
-                    else -> skillConfigurationStatus(skill, configuration!!.objects("skills"))
-                }
-                Row(Modifier.fillMaxWidth().heightIn(min = 76.dp).testTag("skill-row-${skill.first("skillId", "skill_id", "id")}")
-                    .clickable { model.navigate("skill/${skill.first("skillId", "skill_id", "id")}") }.padding(start = 4.dp),
+                val id = skill.first("skillId", "skill_id", "id")
+                val status = skillCatalogueStatus(skill, references[id], showAdded = catalogueScope == "all")
+                Row(Modifier.fillMaxWidth().heightIn(min = 76.dp).testTag("skill-row-$id")
+                    .clickable { model.navigate("skill/$id") }.padding(start = 4.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    LibraryItemText(skillCatalogueTitle(skill), skillCatalogueMetadata(skill, status).replace("\n", " · "),
-                        Modifier.weight(1f).padding(vertical = 14.dp), detailMaxLines = 2, highlight = query)
+                    LibraryItemText(skillCatalogueTitle(skill), skillCatalogueDescription(skill),
+                        Modifier.weight(1f).padding(vertical = 14.dp), highlight = query)
+                    if (status.isNotBlank()) {
+                        Text(status, Modifier.padding(start = 8.dp), fontSize = 12.sp,
+                            color = if (status == "可更新") MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                         Icon(painterResource(R.drawable.e_expand), null,
                             Modifier.size(CatsCoMobileSpec.actionIconSize).graphicsLayer { rotationZ = -90f },
@@ -1069,6 +1318,13 @@ private fun ModelEditor(state: WorkspaceState, model: WorkspaceViewModel) {
     val validCustom = validEndpoint && draft["name"].isNotBlank() && (draft["context"].toLongOrNull() ?: 0) > 0 &&
         (custom.optBoolean("api_key_configured") || apiKey.isNotBlank())
     val managementEnabled = config.optBoolean("management_enabled", true)
+    val modelConfigReady = state.resource.loaded && !state.resource.loading && state.resource.error == null
+    LaunchedEffect(state.modelPickerRequested, modelConfigReady, managementEnabled) {
+        if (state.modelPickerRequested && modelConfigReady) {
+            chooser = managementEnabled
+            model.consumeModelPickerRequest()
+        }
+    }
     if (chooser) CatsCoAlertDialog(onDismissRequest = { chooser = false }, title = { Text("选择模型") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ModuleTextField(modelQuery, { modelQuery = it }, Modifier.fillMaxWidth(), placeholder = { Text("搜索模型") }, singleLine = true)

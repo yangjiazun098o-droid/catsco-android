@@ -1,5 +1,7 @@
 package cc.catsco.android
 
+import android.app.Application
+import android.content.SharedPreferences
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -11,10 +13,19 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cc.catsco.android.ui.*
+import cc.catsco.core.ServerAddress
+import cc.catsco.core.Session
+import cc.catsco.core.WorkspaceRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
@@ -105,6 +116,49 @@ class ModulePolishTest {
         compose.runOnIdle { assertTrue(retried) }
     }
 
+    @Test fun backingOutOfInviteRestoresEntitlementsUntilRedemptionSucceeds() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val store = ViewModelStore()
+        val session = Session(ServerAddress.parse("https://example.test"), "fixture", "101", "测试")
+        val prefix = "commercial-${java.util.UUID.randomUUID()}"
+        val application = object : Application() {
+            init { attachBaseContext(instrumentation.targetContext) }
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
+                baseContext.getSharedPreferences("$prefix.$name", mode)
+        }
+        var requests = 0
+        val repository = object : WorkspaceRepository by DebugEntry.repository() {
+            override suspend fun resource(session: Session, path: String, query: Map<String, String>, method: String, body: String?): String =
+                if (path == "/api/relay/commercial") JSONObject().put("credits", ++requests).toString() else "{}"
+        }
+        lateinit var model: WorkspaceViewModel
+        try {
+            instrumentation.runOnMainSync {
+                model = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(application))[WorkspaceViewModel::class.java]
+                WorkspaceViewModel::class.java.getDeclaredField("repository").apply { isAccessible = true }.set(model, repository)
+                @Suppress("UNCHECKED_CAST")
+                val state = WorkspaceViewModel::class.java.getDeclaredField("mutable")
+                    .apply { isAccessible = true }.get(model) as MutableStateFlow<WorkspaceState>
+                state.value = WorkspaceState(session = session, preview = true)
+                model.navigate("commercial")
+            }
+            val loaded = runBlocking { withTimeout(5_000) { model.state.first { it.resource.loaded } } }.resource
+            instrumentation.runOnMainSync {
+                model.navigate("redeem")
+                model.back()
+                assertSame(loaded.value, model.state.value.resource.value)
+                assertFalse(model.state.value.resource.loading)
+                assertEquals(1, requests)
+                model.navigate("redeem")
+                model.refreshEntitlementsAfterRedemption()
+                model.back()
+            }
+            runBlocking { withTimeout(5_000) { model.state.first { it.resource.value.optInt("credits") == 2 } } }
+        } finally {
+            instrumentation.runOnMainSync { store.clear() }
+        }
+    }
+
     @Test fun skillPublishersUseReadableNamesFromBothSupportedFormats() {
         val author = JSONObject().put("name", "publisher-id").put("displayName", "发布者")
         assertEquals("发布者", skillPublisher(JSONObject().put("author", author)))
@@ -136,7 +190,7 @@ class ModulePolishTest {
     @Test fun capsuleCanReverseRepeatedlyAndDispatchesOneAction() {
         var expanded by mutableStateOf(false)
         var actions = 0
-        show { CatsCoMorphingMenu(expanded, { expanded = it }, {}, { actions++ }, {}, {}) }
+        show { CatsCoHeaderActionMenu(expanded, { expanded = it }, {}, { actions++ }, {}, {}) }
         compose.mainClock.autoAdvance = false
         repeat(4) {
             compose.runOnUiThread { expanded = !expanded }

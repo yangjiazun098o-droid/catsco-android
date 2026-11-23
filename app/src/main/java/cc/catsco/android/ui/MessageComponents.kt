@@ -1,16 +1,16 @@
 package cc.catsco.android.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
+import android.widget.Toast
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -28,11 +28,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -71,13 +68,19 @@ fun MessageTurnContent(
     onRegenerate: ((MessageTurn) -> Unit)? = null,
     regenerateEnabled: Boolean = true,
     stopping: Boolean = false,
+    showSentReceipt: Boolean = false,
+    attachmentFailure: Pair<String, String>? = null,
 ) {
     if (mine) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
             Surface(
-                Modifier.widthIn(max = 320.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = if (MaterialTheme.colorScheme.background.luminance() < .5f) Color(0xFF2C2C2E) else Color(0xFFE6E6E9),
+                Modifier.widthIn(max = 320.dp).then(
+                    if (turn.pendingDelivery) Modifier.testTag("pending-outgoing-message").semantics {
+                        stateDescription = "正在发送"
+                    } else Modifier,
+                ),
+                shape = UserBubbleShape,
+                color = conversationBubbleColor(mine = true),
             ) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     turn.quote?.let { MessageQuotePreview(it) }
@@ -88,8 +91,12 @@ fun MessageTurnContent(
                             }
                         }
                     }
-                    turn.files.forEach { MessageFileCard(it, filesEnabled, onPreview, onDownload) }
+                    turn.files.forEach { file -> MessageFileCard(file, filesEnabled, onPreview, onDownload, attachmentFailure?.takeIf { it.first == file.url }?.second) }
                 }
+            }
+            if (showSentReceipt) {
+                Text("已发送", Modifier.padding(top = 4.dp, end = 4.dp), fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         return
@@ -100,7 +107,7 @@ fun MessageTurnContent(
         if (senderName.isNotBlank() || activity != null) AgentMessageHeader(senderName.ifBlank { "Agent" }, activity)
         turn.progress.forEach { MessageReplyBody(listOf(it)) }
         if (turn.hasProcess) MessageWorkingProcess(turn, active)
-        turn.files.forEach { MessageFileCard(it, filesEnabled, onPreview, onDownload) }
+        turn.files.forEach { file -> MessageFileCard(file, filesEnabled, onPreview, onDownload, attachmentFailure?.takeIf { it.first == file.url }?.second) }
         if (turn.text.isNotEmpty() || loadingReply) {
             val reply: @Composable (Modifier) -> Unit = { modifier ->
                 AgentReplyBubble(loadingReply, modifier) {
@@ -122,8 +129,9 @@ fun MessageTurnContent(
 private fun MessageReplyBody(paragraphs: List<String>, modifier: Modifier = Modifier) {
     Surface(
         modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(15.dp),
-        color = MaterialTheme.colorScheme.surface,
+        shape = AgentBubbleShape,
+        color = conversationBubbleColor(mine = false),
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         MessageReplyContent(paragraphs)
     }
@@ -186,15 +194,20 @@ private fun MessageActionReply(turn: MessageTurn, regenerateEnabled: Boolean, on
             expanded, anchor ?: IntOffset(view.width / 2, view.height / 2), regenerateEnabled,
             onDismiss = { expanded = false },
             onQuote = { onQuote(turn) },
-            onCopy = {
-                runCatching {
-                    context.getSystemService(android.content.ClipboardManager::class.java)
-                        .setPrimaryClip(android.content.ClipData.newPlainText("CatsCo", turn.text.joinToString("\n\n")))
-                }.onFailure { android.widget.Toast.makeText(context, "暂时无法复制，请重试。", android.widget.Toast.LENGTH_SHORT).show() }
-            },
+            onCopy = { copyMessageText(context, turn.text.joinToString("\n\n")) },
             onRegenerate = { onRegenerate(turn) },
         )
     }
+}
+
+internal fun copyMessageText(context: Context, text: String) {
+    runCatching {
+        context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("CatsCo", text))
+    }.onSuccess {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+        }
+    }.onFailure { Toast.makeText(context, "暂时无法复制，请重试。", Toast.LENGTH_SHORT).show() }
 }
 
 @Composable
@@ -232,21 +245,21 @@ private fun MessageWorkingProcess(turn: MessageTurn, active: Boolean) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 40.dp)
-                .clickable(enabled = turn.steps.isNotEmpty(), role = Role.Button, onClickLabel = if (expanded) "收起执行过程" else "展开执行过程") { expanded = !expanded }
+                .catsCoDisclosureClickable(
+                    expanded = expanded,
+                    enabled = turn.steps.isNotEmpty(),
+                    onClickLabel = if (expanded) "收起执行过程" else "展开执行过程",
+                ) { expanded = !expanded }
                 .semantics { stateDescription = if (expanded) "已展开" else "已收起" },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            if (turn.steps.isNotEmpty()) MessageChevron(expanded, MaterialTheme.colorScheme.onSurfaceVariant)
+            if (turn.steps.isNotEmpty()) CatsCoDisclosureChevron(expanded, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(label, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (label == "执行失败") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             Text(count, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (failures > 0) Text("${failures} 步异常", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
         }
-        AnimatedVisibility(
-            expanded,
-            enter = expandVertically(spring(dampingRatio = 1.1f, stiffness = 450f)) + fadeIn(),
-            exit = shrinkVertically(spring(dampingRatio = 1.1f, stiffness = 450f)) + fadeOut(),
-        ) {
+        CatsCoSectionReveal(expanded) {
             val line = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .65f)
             Column(
                 Modifier.fillMaxWidth().padding(start = 7.dp).drawBehind {
@@ -279,14 +292,14 @@ private fun MessageWorkingStep(step: MessageWorkStep) {
             else -> step.name
         }
     }
-    Column(Modifier.fillMaxWidth().animateContentSize(spring(dampingRatio = 1.1f, stiffness = 450f))) {
+    Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 44.dp).clickable(role = Role.Button) { expanded = !expanded }
+            Modifier.fillMaxWidth().heightIn(min = 44.dp).catsCoDisclosureClickable(expanded) { expanded = !expanded }
                 .semantics { stateDescription = if (expanded) "已展开" else "已收起" },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            MessageChevron(expanded, accent)
+            CatsCoDisclosureChevron(expanded, tint = accent)
             Icon(painterResource(if (step.kind == "subagent") R.drawable.e_people else if (step.kind == "thinking") R.drawable.e_chat else R.drawable.message_terminal), null, Modifier.size(16.dp), tint = accent.copy(alpha = .8f))
             Text(title, Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = accent, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (step.error) Text("失败", fontSize = 12.sp, color = accent)
@@ -295,7 +308,7 @@ private fun MessageWorkingStep(step: MessageWorkStep) {
             Text(step.failureReason, Modifier.padding(start = 35.dp, bottom = 6.dp), fontSize = 12.sp, lineHeight = 18.sp,
                 color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        if (expanded) {
+        CatsCoSectionReveal(expanded) {
             Column(Modifier.fillMaxWidth().padding(start = 20.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (step.kind == "tool") Text(step.name, fontSize = 12.sp, fontFamily = CatsCoFontFamily, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (step.kind == "thinking" && step.summary.isNotBlank()) MarkdownContent(step.summary)
@@ -324,25 +337,32 @@ internal fun MessageCodeBlock(text: String, fontSize: TextUnit = 12.sp) {
 }
 
 @Composable
-private fun MessagePlanCard(steps: List<MessagePlanStep>) {
+internal fun MessagePlanCard(steps: List<MessagePlanStep>) {
+    var expanded by rememberSaveable { mutableStateOf(true) }
     Surface(
         Modifier.fillMaxWidth(), shape = CatsCoMobileSpec.contentCardShape,
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(.5.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).catsCoDisclosureClickable(expanded) { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(painterResource(R.drawable.message_document), null, Modifier.size(18.dp), tint = Mint.copy(alpha = .8f))
                 Text("计划", Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 Text("${steps.count { it.status == "completed" }}/${steps.size} 已完成", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                CatsCoDisclosureChevron(expanded)
             }
-            steps.forEach { step ->
+            CatsCoSectionReveal(expanded) {
+              Column(Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                steps.forEach { step ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
                     PlanStatusIcon(step.status, Modifier.padding(top = 2.dp).size(17.dp))
                     Text(step.text, Modifier.weight(1f), fontSize = 14.sp, lineHeight = 21.sp,
                         fontWeight = if (step.status == "in_progress") FontWeight.Medium else FontWeight.Normal,
                         color = if (step.status == "pending") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = .83f))
                 }
+                }
+              }
             }
         }
     }
@@ -350,21 +370,18 @@ private fun MessagePlanCard(steps: List<MessagePlanStep>) {
 
 @Composable
 private fun PlanStatusIcon(status: String, modifier: Modifier) {
-    val color = if (status == "completed") Mint else if (status == "in_progress") MaterialTheme.colorScheme.onSurface.copy(alpha = .75f) else MaterialTheme.colorScheme.onSurfaceVariant
-    val icon = when (status) { "completed" -> R.drawable.e_check_circle; "in_progress" -> R.drawable.e_progress_circle; else -> R.drawable.e_circle }
-    Icon(painterResource(icon), null,
-        modifier.semantics { stateDescription = when (status) { "completed" -> "已完成"; "in_progress" -> "进行中"; else -> "待处理" } }, tint = color)
-}
-
-@Composable
-private fun MessageChevron(expanded: Boolean, color: Color) {
-    val angle by animateFloatAsState(if (expanded) 90f else 0f, spring(dampingRatio = 1.1f, stiffness = 450f), label = "messageDisclosure")
-    Icon(painterResource(R.drawable.e_chevron_right), null, Modifier.size(CatsCoMobileSpec.actionIconSize).rotate(angle), tint = color)
+    Crossfade(status, modifier.semantics {
+        stateDescription = when (status) { "completed" -> "已完成"; "in_progress" -> "进行中"; else -> "待处理" }
+    }, animationSpec = tween(145), label = "planStatus") { value ->
+        val color = if (value == "completed") Mint else if (value == "in_progress") MaterialTheme.colorScheme.onSurface.copy(alpha = .75f) else MaterialTheme.colorScheme.onSurfaceVariant
+        val icon = when (value) { "completed" -> R.drawable.e_check_circle; "in_progress" -> R.drawable.e_progress_circle; else -> R.drawable.e_circle }
+        Icon(painterResource(icon), null, Modifier.fillMaxSize(), tint = color)
+    }
 }
 
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-private fun MessageFileCard(file: Attachment, enabled: Boolean, onPreview: (Attachment) -> Unit, onDownload: (Attachment) -> Unit) {
+private fun MessageFileCard(file: Attachment, enabled: Boolean, onPreview: (Attachment) -> Unit, onDownload: (Attachment) -> Unit, error: String? = null) {
     var details by remember { mutableStateOf(false) }
     if (details) CatsCoAlertDialog(onDismissRequest = { details = false }, title = { Text("文件信息") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -388,7 +405,7 @@ private fun MessageFileCard(file: Attachment, enabled: Boolean, onPreview: (Atta
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(file.name, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(attachmentDescription(file), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(error ?: attachmentDescription(file), fontSize = 12.sp, color = if (error == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
                 }
             }
             IconButton(onClick = { onPreview(file) }, enabled = enabled, modifier = Modifier.size(48.dp)) {

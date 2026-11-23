@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
@@ -27,6 +28,11 @@ class ConversationScrollTest {
     private var viewport by mutableStateOf(480)
     private var topic by mutableStateOf("one")
     private var loading by mutableStateOf(false)
+    private var hasMore by mutableStateOf(false)
+    private var loadingOlder by mutableStateOf(false)
+    private var olderLoadFailed by mutableStateOf(false)
+    private var olderRequests = 0
+    private var localSendRevision by mutableLongStateOf(0)
     private var nativeMarkdown = false
     private var targetMessageId by mutableStateOf(0L)
 
@@ -35,7 +41,7 @@ class ConversationScrollTest {
         List(lines) { "内容 $id · $it" } + "消息 $id 结束", emptyList(), "", false,
     )
 
-    private fun openTimeline() {
+    private fun openTimeline(topPadding: Dp = 0.dp, onHeaderOverlap: ((Boolean) -> Unit)? = null) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.uiAutomation.executeShellCommand(
             "am start -W -n cc.catsco.android.debug/cc.catsco.android.MessageReviewActivity",
@@ -48,8 +54,14 @@ class ConversationScrollTest {
                 CatsCoTheme {
                     Surface(Modifier.fillMaxSize().statusBarsPadding()) {
                         Box(Modifier.fillMaxSize()) {
-                            ConversationTimeline(topic, turns, "1", loading, false, {}, Modifier.fillMaxWidth().height(viewport.dp),
-                                targetMessageId = targetMessageId) { entry ->
+                            ConversationTimeline(topic, turns, "1", loading, hasMore, {
+                                olderRequests++
+                                loading = true
+                                loadingOlder = true
+                                olderLoadFailed = false
+                            }, Modifier.fillMaxWidth().height(viewport.dp), targetMessageId = targetMessageId,
+                                loadingOlder = loadingOlder, olderLoadFailed = olderLoadFailed, localSendRevision = localSendRevision,
+                                topContentPadding = topPadding, onMessagesBehindHeader = onHeaderOverlap) { entry ->
                                 if (nativeMarkdown) {
                                     MessageTurnContent(entry, entry.senderId == "1", "Agent", false, true, {}, {})
                                 } else Column(Modifier.fillMaxWidth().heightIn(min = 90.dp)) {
@@ -62,6 +74,18 @@ class ConversationScrollTest {
             }
         }
         compose.waitForIdle()
+    }
+
+    @Test fun headerOverlapOnlyStartsWhenMessagesScrollUnderTheTopBar() {
+        turns = listOf(turn(1, "1"))
+        var overlaps = false
+        openTimeline(topPadding = 64.dp) { overlaps = it }
+        compose.runOnIdle {
+            assertEquals(false, overlaps)
+            turns = (1..24).map { turn(it, if (it % 2 == 0) "9" else "1") }
+        }
+        compose.onNodeWithText("消息 24 结束").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(true, overlaps) }
     }
 
     @Test fun refreshingExistingMessagesKeepsTheReplyVisibleWithoutAnExtraProgressBar() {
@@ -126,7 +150,13 @@ class ConversationScrollTest {
         compose.onNodeWithText("消息 25 结束").assertIsDisplayed()
         compose.onNodeWithTag("conversation_timeline").performTouchInput { swipeDown(durationMillis = 400) }
         compose.runOnIdle { turns = turns + turn(26, "1") }
-        compose.onNodeWithText("消息 26 结束").assertIsDisplayed()
+        compose.onNodeWithTag("conversation_latest").assertIsDisplayed()
+        compose.onNodeWithText("消息 26 结束").assertDoesNotExist()
+        compose.runOnIdle {
+            localSendRevision++
+            turns = turns + turn(27, "1")
+        }
+        compose.onNodeWithText("消息 27 结束").assertIsDisplayed()
     }
 
     @Test fun olderHistoryRetainsAnchorAndTopicSwitchStartsAtLatest() {
@@ -138,5 +168,35 @@ class ConversationScrollTest {
         assertEquals(before.top, after.top, 1f)
         compose.runOnIdle { topic = "two"; turns = listOf(turn(50, "1"), turn(51, "9", 40)) }
         compose.onNodeWithText("消息 51 结束").assertIsDisplayed()
+    }
+
+    @Test fun olderHistoryLoadsNearTheTopAndRetriesOnlyOnRequestAfterFailure() {
+        hasMore = true
+        openTimeline()
+        compose.onNodeWithText("消息 24 结束").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, olderRequests) }
+
+        val timeline = compose.onNodeWithTag("conversation_timeline")
+        timeline.performTouchInput { swipeDown(durationMillis = 400) }
+        timeline.performScrollToIndex(1)
+        compose.onNodeWithText("正在加载更早的消息…").assertIsDisplayed()
+        val anchor = compose.onNodeWithText("消息 2 结束")
+        val before = anchor.fetchSemanticsNode().boundsInRoot.top
+        compose.runOnIdle {
+            assertEquals(1, olderRequests)
+            loading = false
+            loadingOlder = false
+            olderLoadFailed = true
+        }
+        compose.onNodeWithText("加载失败，点此重试").performClick()
+        compose.runOnIdle {
+            assertEquals(2, olderRequests)
+            turns = (-10..0).map { turn(it, "9") } + turns
+            loading = false
+            loadingOlder = false
+        }
+
+        assertEquals(before, anchor.fetchSemanticsNode().boundsInRoot.top, 1f)
+        compose.runOnIdle { assertEquals(2, olderRequests) }
     }
 }

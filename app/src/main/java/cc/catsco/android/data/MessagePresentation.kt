@@ -6,6 +6,7 @@ import cc.catsco.core.MessageQuote
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+import java.util.IdentityHashMap
 
 data class MessagePlanStep(val text: String, val status: String)
 
@@ -38,6 +39,8 @@ data class MessageTurn(
     val messageId: Long = 0,
     val quote: MessageQuote? = null,
     val sourceMessageIds: Set<Long> = emptySet(),
+    val pendingDelivery: Boolean = false,
+    val followup: Boolean = false,
 ) {
     val hasProcess get() = steps.isNotEmpty() || plan.isNotEmpty()
     val hasOutput get() = text.isNotEmpty() || files.isNotEmpty()
@@ -45,6 +48,7 @@ data class MessageTurn(
 
 private val processTypes = setOf("thinking", "reasoning", "assistant_text", "tool_use", "tool_call", "tool_result", "runtime_plan", "process")
 private val mediaTypes = setOf("image", "file", "attachment", "audio", "voice", "video")
+private val assistantRoles = setOf("assistant", "agent")
 
 internal fun decodedJson(value: Any?): Any? = if (value is String) {
     runCatching { JSONObject(value) }.getOrNull() ?: runCatching { JSONArray(value) }.getOrNull() ?: value
@@ -59,27 +63,38 @@ private fun displayValue(value: Any?): String = when (value) {
     else -> value.toString()
 }
 
-private fun messageMetadata(message: ChatMessage) = jsonObject(jsonObject(message.raw).opt("metadata"))
+internal class MessageFields(val raw: JSONObject) {
+    val metadata = jsonObject(raw.opt("metadata"))
+    val topic = raw.first("topic_id", "topic")
+    val replyTo = raw.optLong("reply_to")
+    val createdAt by lazy(LazyThreadSafetyMode.NONE) {
+        raw.optString("created_at").takeIf(String::isNotBlank)?.let {
+            runCatching { Instant.parse(it).epochSecond }.getOrNull()
+        }
+    }
+}
 
-private fun messageBlocks(message: ChatMessage): List<JSONObject> {
-    val metadata = messageMetadata(message)
-    val raw = jsonObject(message.raw)
-    val content = jsonObject(raw.opt("content"))
+private fun messageBlocks(message: ChatMessage, fields: MessageFields): List<JSONObject> {
+    val raw = fields.raw
+    val metadata = fields.metadata
     val stored = message.blocks.map(::jsonObject)
-    val blocks = if (stored.isNotEmpty()) stored else listOf(when {
-        message.kind == "runtime_plan" -> JSONObject().put("type", "runtime_plan")
-            .put("payload", content.optJSONObject("payload") ?: raw.optJSONObject("payload") ?: content)
-        content.first("type").isNotBlank() -> content
-        message.kind in setOf("tool_use", "tool_call") -> JSONObject().put("type", "tool_use")
-            .put("id", metadata.first("id", "tool_call_id", "tool_use_id"))
-            .put("name", message.text).put("input", decodedJson(metadata.opt("input")))
-        message.kind == "tool_result" -> JSONObject().put("type", "tool_result")
-            .put("tool_use_id", metadata.first("tool_use_id", "tool_call_id", "id"))
-            .put("content", message.text).put("is_error", metadata.optBoolean("is_error"))
-        message.kind in setOf("thinking", "reasoning") -> JSONObject().put("type", "thinking").put("thinking", message.text)
-        message.kind in mediaTypes -> JSONObject().put("type", message.kind).put("payload", content.optJSONObject("payload") ?: raw.optJSONObject("payload") ?: content)
-        else -> JSONObject().put("type", if (message.kind in processTypes) "assistant_text" else "text").put("text", message.text)
-    })
+    val blocks = stored.ifEmpty {
+        val content = jsonObject(raw.opt("content"))
+        listOf(when {
+            message.kind == "runtime_plan" -> JSONObject().put("type", "runtime_plan")
+                .put("payload", content.optJSONObject("payload") ?: raw.optJSONObject("payload") ?: content)
+            content.first("type").isNotBlank() -> content
+            message.kind in setOf("tool_use", "tool_call") -> JSONObject().put("type", "tool_use")
+                .put("id", metadata.first("id", "tool_call_id", "tool_use_id"))
+                .put("name", message.text).put("input", decodedJson(metadata.opt("input")))
+            message.kind == "tool_result" -> JSONObject().put("type", "tool_result")
+                .put("tool_use_id", metadata.first("tool_use_id", "tool_call_id", "id"))
+                .put("content", message.text).put("is_error", metadata.optBoolean("is_error"))
+            message.kind in setOf("thinking", "reasoning") -> JSONObject().put("type", "thinking").put("thinking", message.text)
+            message.kind in mediaTypes -> JSONObject().put("type", message.kind).put("payload", content.optJSONObject("payload") ?: raw.optJSONObject("payload") ?: content)
+            else -> JSONObject().put("type", if (message.kind in processTypes) "assistant_text" else "text").put("text", message.text)
+        })
+    }
     return blocks.map { block ->
         val normalized = JSONObject(block.toString())
         if (normalized.isNull("metadata")) normalized.put("metadata", metadata)
@@ -91,33 +106,73 @@ private fun messageBlocks(message: ChatMessage): List<JSONObject> {
     }
 }
 
+/** A conversation owns one cache. A revised message invalidates its decoded blocks and turn. */
+internal class MessagePresentationCache {
+    internal val records = IdentityHashMap<ChatMessage, Pair<MessageFields, List<JSONObject>>>()
+    internal var groups = emptyMap<String, CachedMessageTurn>()
+}
+
+internal data class CachedMessageTurn(val messages: List<ChatMessage>, val assistant: Boolean,
+    val quote: MessageQuote?, val followup: Boolean, val turn: MessageTurn)
+
 /** Display projection of the desktop message grouping. Raw history stays intact. */
-fun presentMessages(messages: List<ChatMessage>, currentUser: String, agentIds: Set<String>, senderNames: Map<String, String> = emptyMap()): List<MessageTurn> {
-    val blocks = messages.associate { it.key to messageBlocks(it) }
-    fun assistant(message: ChatMessage): Boolean = message.senderId != currentUser && (
-        message.senderId in agentIds || messageMetadata(message).first("role", "sender_type") in setOf("assistant", "agent") ||
-            jsonObject(message.raw).optString("role") == "assistant" || blocks[message.key].orEmpty().any { it.optString("type") in processTypes }
-        )
+fun presentMessages(messages: List<ChatMessage>, currentUser: String, agentIds: Set<String>,
+    senderNames: Map<String, String> = emptyMap(), followupMessageIds: Set<Long> = emptySet()): List<MessageTurn> {
+    return projectMessages(messages, currentUser, agentIds, senderNames, followupMessageIds, MessagePresentationCache())
+}
+
+internal fun projectMessages(messages: List<ChatMessage>, currentUser: String, agentIds: Set<String>,
+    senderNames: Map<String, String>, localFollowups: Set<Long>, cache: MessagePresentationCache): List<MessageTurn> {
+    val fields = IdentityHashMap<ChatMessage, MessageFields>(messages.size)
+    val followupMessageIds = localFollowups.toMutableSet()
+    val quotedMessages = HashMap<Long, ChatMessage>()
+    val blocks = messages.associate { message ->
+        val (decoded, parsed) = cache.records.getOrPut(message) {
+            val record = MessageFields(jsonObject(message.raw))
+            record to messageBlocks(message, record)
+        }
+        fields[message] = decoded
+        if (message.sequence > 0L) {
+            quotedMessages.putIfAbsent(message.sequence, message)
+            if (message.senderId == currentUser && decoded.metadata.optBoolean("task_followup")) followupMessageIds.add(message.sequence)
+        }
+        message.key to parsed
+    }
+    cache.records.keys.retainAll(fields.keys)
+    fun assistant(message: ChatMessage): Boolean {
+        if (message.senderId == currentUser) return false
+        val decoded = fields.getValue(message)
+        return message.senderId in agentIds || decoded.metadata.first("role", "sender_type") in assistantRoles ||
+            decoded.raw.optString("role") == "assistant" || blocks[message.key].orEmpty().any { it.optString("type") in processTypes }
+    }
     val groups = mutableListOf<MutableList<ChatMessage>>()
     messages.filter { it.kind != "runtime_plan" }.forEach { message ->
-        val prior = groups.lastOrNull()
+        val acrossFollowup = groups.lastOrNull()?.last()?.sequence in followupMessageIds
+        val prior = if (acrossFollowup && message.turnId.isNotBlank()) {
+            groups.asReversed().firstOrNull { it.last().sequence !in followupMessageIds }
+        } else groups.lastOrNull()
         val previous = prior?.lastOrNull()
         val priorTurn = prior?.asReversed()?.firstOrNull { it.turnId.isNotBlank() }?.turnId.orEmpty()
         val sameTurn = priorTurn.isNotBlank() && priorTurn == message.turnId
         val turnConflict = priorTurn.isNotBlank() && message.turnId.isNotBlank() && priorTurn != message.turnId
-        val priorTopic = previous?.let { jsonObject(it.raw).first("topic_id", "topic") }.orEmpty()
-        val nextTopic = jsonObject(message.raw).first("topic_id", "topic")
+        val priorFields = previous?.let(fields::getValue)
+        val nextFields = fields.getValue(message)
+        val priorTopic = priorFields?.topic.orEmpty()
+        val nextTopic = nextFields.topic
         val topicConflict = priorTopic.isNotBlank() && nextTopic.isNotBlank() && priorTopic != nextTopic
         val hasProcess = prior.orEmpty().any { entry -> blocks[entry.key].orEmpty().any { it.optString("type") in processTypes } } || blocks[message.key].orEmpty().any { it.optString("type") in processTypes }
-        val gap = runCatching {
-            Instant.parse(jsonObject(message.raw).optString("created_at")).epochSecond - Instant.parse(jsonObject(previous?.raw).optString("created_at")).epochSecond
-        }.getOrNull()
-        val replyConflict = !hasProcess && (jsonObject(message.raw).optLong("reply_to") > 0 || jsonObject(previous?.raw).optLong("reply_to") > 0)
-        if (previous != null && assistant(message) && assistant(previous) && previous.senderId == message.senderId && !turnConflict && !topicConflict && !replyConflict && (sameTurn || hasProcess || gap in 0L..90L)) {
+        val gap = if (acrossFollowup || sameTurn || hasProcess) null else {
+            val earlier = priorFields?.createdAt
+            val later = nextFields.createdAt
+            if (earlier != null && later != null) later - earlier else null
+        }
+        val replyConflict = !hasProcess && (nextFields.replyTo > 0 || (priorFields?.replyTo ?: 0) > 0)
+        val continuesReply = if (acrossFollowup) sameTurn else sameTurn || hasProcess || gap in 0L..90L
+        if (previous != null && assistant(message) && assistant(previous) && previous.senderId == message.senderId && !turnConflict && !topicConflict && !replyConflict && continuesReply) {
             prior.add(message)
         } else groups.add(mutableListOf(message))
     }
-    val humanBoundary = groups.indexOfLast { it.last().senderId == currentUser }
+    val humanBoundary = groups.indexOfLast { it.last().senderId == currentUser && it.last().sequence !in followupMessageIds }
     val humanSequence = groups.getOrNull(humanBoundary)?.last()?.sequence ?: 0
     messages.filter { it.kind == "runtime_plan" }.forEach { plan ->
         if (maxOf(plan.afterSequence, plan.sequence) < humanSequence) return@forEach
@@ -128,8 +183,27 @@ fun presentMessages(messages: List<ChatMessage>, currentUser: String, agentIds: 
         if (index > humanBoundary) groups[index].add(plan)
         else if (index < 0 && (groups.isEmpty() || groups.last().last().senderId == currentUser)) groups.add(mutableListOf(plan))
     }
-    return groups.map { group ->
-        val isAssistant = assistant(group.first())
+    val previousGroups = cache.groups
+    val nextGroups = HashMap<String, CachedMessageTurn>(groups.size)
+    val turns = groups.map { group ->
+        val first = group.first()
+        val isAssistant = assistant(first)
+        val last = group.last()
+        val finalMessage = group.lastOrNull { entry ->
+            entry.sequence > 0 && blocks[entry.key].orEmpty().any { it.optString("type") == "text" }
+        } ?: last
+        val replyId = fields.getValue(finalMessage).replyTo
+        val quote = if (replyId > 0) {
+            val quoted = quotedMessages[replyId]
+            MessageQuote(replyId, quoted?.senderName.orEmpty().ifBlank { senderNames[quoted?.senderId].orEmpty() }, quoted?.text ?: "较早的消息")
+        } else null
+        val followup = !isAssistant && first.sequence in followupMessageIds
+        val cached = previousGroups[first.key]
+        if (cached != null && cached.assistant == isAssistant && cached.quote == quote && cached.followup == followup &&
+            cached.messages.size == group.size && group.indices.all { cached.messages[it] === group[it] }) {
+            nextGroups[first.key] = cached
+            return@map cached.turn
+        }
         val working = mutableListOf<JSONObject>()
         val output = mutableListOf<JSONObject>()
         val firstTool = group.indexOfFirst { entry -> blocks[entry.key].orEmpty().any { it.optString("type") == "tool_use" && it.optString("name") != "update_plan" } }
@@ -137,31 +211,23 @@ fun presentMessages(messages: List<ChatMessage>, currentUser: String, agentIds: 
             val source = blocks[message.key].orEmpty()
             val hasMedia = source.any { it.optString("type") in mediaTypes }
             source.forEach { original ->
-                val block = JSONObject(original.toString())
-                if (isAssistant && firstTool >= 0 && index < firstTool && !hasMedia && block.optString("type") == "text") block.put("type", "assistant_text")
+                val block = if (isAssistant && firstTool >= 0 && index < firstTool && !hasMedia && original.optString("type") == "text") {
+                    JSONObject(original.toString()).put("type", "assistant_text")
+                } else original
                 if (block.optString("type") in processTypes) working.add(block) else output.add(block)
             }
             if (!hasMedia) {
-                (message.attachments + messageMetadata(message).objects("attachments").map(::attachment)).forEach { file ->
+                (message.attachments + fields.getValue(message).metadata.objects("attachments").map(::attachment)).forEach { file ->
                     output.add(JSONObject().put("type", "file").put("payload", jsonObject(file.raw)))
                 }
             }
         }
         val trace = workingTrace(working)
-        val last = group.last()
-        val finalMessage = group.lastOrNull { entry ->
-            entry.sequence > 0 && blocks[entry.key].orEmpty().any { it.optString("type") == "text" }
-        } ?: last
-        val replyId = jsonObject(finalMessage.raw).optLong("reply_to")
-        val quotedMessage = messages.find { it.sequence == replyId }
-        val quote = if (replyId > 0) MessageQuote(
-            replyId,
-            quotedMessage?.senderName.orEmpty().ifBlank { senderNames[quotedMessage?.senderId].orEmpty() },
-            quotedMessage?.text ?: "较早的消息",
-        ) else null
         val state = group.asReversed().firstNotNullOfOrNull { message ->
-            val raw = jsonObject(message.raw)
-            messageMetadata(message).first("execution_state", "executionState").ifBlank { raw.first("_execution_state", "execution_state") }.takeIf(String::isNotBlank)
+            val decoded = fields.getValue(message)
+            decoded.metadata.first("execution_state", "executionState")
+                .ifBlank { decoded.raw.first("_execution_state", "execution_state") }
+                .takeIf(String::isNotBlank)
         }.orEmpty()
         MessageTurn(
             group.first().key, last.senderId, group.lastOrNull { it.senderName.isNotBlank() }?.senderName.orEmpty(), isAssistant,
@@ -170,9 +236,11 @@ fun presentMessages(messages: List<ChatMessage>, currentUser: String, agentIds: 
             output.filter { it.optString("type") == "text" }.map { it.first("text", "content") }.filter(String::isNotBlank),
             output.filter { it.optString("type") in mediaTypes }.map { attachment(it.optJSONObject("payload") ?: it) }.filter { it.url.isNotBlank() }.distinctBy { it.url },
             state, group.any { it.streaming }, finalMessage.sequence, quote,
-            sourceMessageIds = group.map { it.sequence }.filter { it > 0 }.toSet(),
-        )
+            sourceMessageIds = group.map { it.sequence }.filter { it > 0 }.toSet(), followup = followup,
+        ).also { nextGroups[first.key] = CachedMessageTurn(group, isAssistant, quote, followup, it) }
     }
+    cache.groups = nextGroups
+    return turns
 }
 
 private fun planSteps(value: Any?): List<MessagePlanStep> {

@@ -124,11 +124,22 @@ class MessageActionMenuTest {
         open(enabled = false)
         swipeReply()
         compose.onNodeWithText("重新生成").assertIsNotEnabled()
-        val height = compose.onNodeWithTag("message-action-test-host").fetchSemanticsNode().boundsInRoot.height
+        val hostNode = compose.onNodeWithTag("message-action-test-host").fetchSemanticsNode()
+        val popupNode = compose.onNodeWithTag("message-action-card").fetchSemanticsNode()
+        val outside = compose.runOnIdle {
+            val root = hostNode.layoutInfo.coordinates
+            val popup = popupNode.layoutInfo.coordinates
+            val popupTop = popup.localToScreen(Offset.Zero)
+            val bounds = androidx.compose.ui.geometry.Rect(popupTop, androidx.compose.ui.geometry.Size(
+                popup.size.width.toFloat(), popup.size.height.toFloat()))
+            listOf(.8f to .8f, .2f to .8f, .8f to .25f, .2f to .25f).map { (x, y) ->
+                root.localToScreen(Offset(root.size.width * x, root.size.height * y))
+            }.first { !bounds.contains(it) }
+        }
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val downTime = android.os.SystemClock.uptimeMillis()
         listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP).forEach { action ->
-            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action, 12f, height * .85f, 0)
+            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action, outside.x, outside.y, 0)
             event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
             try { automation.injectInputEvent(event, true) } finally { event.recycle() }
         }
@@ -140,7 +151,8 @@ class MessageActionMenuTest {
     @Test fun draggingAcrossTextDoesNotOpenTheMenu() {
         open()
         compose.onNodeWithTag("message-reply-42").performTouchInput {
-            swipe(Offset(center.x + 60f, 45f), Offset(center.x - 60f, 45f), 200)
+            val halfDistance = 16.dp.toPx()
+            swipe(Offset(center.x + halfDistance, 24.dp.toPx()), Offset(center.x - halfDistance, 24.dp.toPx()), 200)
         }
         compose.onNodeWithTag("message-action-card").assertDoesNotExist()
     }

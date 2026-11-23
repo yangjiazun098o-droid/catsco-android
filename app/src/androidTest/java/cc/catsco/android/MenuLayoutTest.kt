@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.*
@@ -12,12 +13,13 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cc.catsco.android.ui.CatsCoConversationActionMenu
-import cc.catsco.android.ui.CatsCoMorphingMenu
+import cc.catsco.android.ui.CatsCoHeaderActionMenu
 import cc.catsco.android.ui.CatsCoMessageActionMenu
 import cc.catsco.android.ui.CatsCoTheme
 import org.junit.Assert.*
@@ -74,6 +76,14 @@ class MenuLayoutTest {
         assertEquals(card.top + inset, rows.first().top, 1f)
         assertEquals(card.bottom - inset, rows.last().bottom, 1f)
         assertEquals(height * 4 + inset * 2, card.height, 1f)
+        assertEquals(with(compose.density) { 192.dp.toPx() }, card.width, 1f)
+        val rename = compose.onNodeWithText("重命名", useUnmergedTree = true)
+        assertEquals(card.left + with(compose.density) { 48.dp.toPx() }, rename.fetchSemanticsNode().boundsInRoot.left, 2f)
+        rename.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
+            val results = mutableListOf<TextLayoutResult>()
+            assertTrue(action(results))
+            assertEquals(FontWeight.Normal, results.single().layoutInput.style.fontWeight)
+        }
         captureContextMenu("history-light")
         compose.onNodeWithText("多选").performClick()
         compose.runOnIdle { assertTrue(selected); assertFalse(expanded) }
@@ -88,40 +98,51 @@ class MenuLayoutTest {
                 }
             }
         }
-        listOf("重命名", "置顶", "多选", "删除").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
+        listOf("重命名", "置顶", "多选", "从本机隐藏").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
         captureContextMenu("history-dark")
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         compose.waitUntil { !expanded }
     }
 
     @Test fun capsuleActionsShareMenuTypographyAndRowsAndCloseAfterSelection() {
-        var expanded by mutableStateOf(true)
+        var expanded by mutableStateOf(false)
         var dark by mutableStateOf(false)
         var refreshed = false
         var newTasks = 0
         var computers = 0
         showMenu {
             CatsCoTheme(dark = dark) {
-                CatsCoMorphingMenu(expanded, { expanded = it }, { computers++ }, { newTasks++ }, {}, { refreshed = true })
+                CatsCoHeaderActionMenu(expanded, { expanded = it }, { computers++ }, { newTasks++ }, {}, { refreshed = true })
             }
         }
-        val labels = listOf("我的电脑", "新建任务", "云端文件", "刷新")
+        val trigger = compose.onNodeWithContentDescription("更多操作")
+        val triggerBounds = trigger.fetchSemanticsNode().boundsInRoot
+        trigger.performClick()
+        val labels = listOf("我的电脑", "新建任务", "文件与应用", "刷新")
         labels.forEach { label ->
             compose.onNodeWithText(label).assertIsDisplayed().assertHeightIsEqualTo(48.dp)
             compose.onNodeWithText(label, useUnmergedTree = true)
                 .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
                     val results = mutableListOf<TextLayoutResult>()
                     assertTrue(action(results))
-                    assertEquals(17.sp, results.single().layoutInput.style.fontSize)
-                    assertEquals(24.sp, results.single().layoutInput.style.lineHeight)
+                    assertEquals(16.sp, results.single().layoutInput.style.fontSize)
+                    assertEquals(22.sp, results.single().layoutInput.style.lineHeight)
+                    assertEquals(FontWeight.Normal, results.single().layoutInput.style.fontWeight)
                 }
         }
-        compose.onNodeWithContentDescription("更多操作菜单").assertHeightIsEqualTo(204.dp)
-        compose.onNodeWithContentDescription("更多操作").assertDoesNotExist()
+        val panel = compose.onNodeWithContentDescription("更多操作菜单").assertHeightIsEqualTo(204.dp)
+        val panelBounds = panel.fetchSemanticsNode().boundsInRoot
+        assertEquals(triggerBounds.right, panelBounds.right, 1f)
+        assertTrue(panelBounds.top <= triggerBounds.top && panelBounds.bottom > triggerBounds.bottom)
+        trigger.assertDoesNotExist()
         captureContextMenu("capsule-light")
         compose.runOnIdle { dark = true }
         labels.forEach { compose.onNodeWithText(it).assertIsDisplayed() }
         captureContextMenu("capsule-dark")
+        compose.onRoot().performTouchInput { click(Offset(1f, centerY)) }
+        panel.assertDoesNotExist()
+        assertEquals(triggerBounds, trigger.fetchSemanticsNode().boundsInRoot)
+        trigger.performClick()
         compose.onNodeWithText("我的电脑").performClick()
         compose.runOnIdle { assertEquals(1, computers); assertFalse(expanded); expanded = true }
         compose.onNodeWithText("刷新").performClick()
@@ -141,7 +162,7 @@ class MenuLayoutTest {
                         Box(Modifier.fillMaxSize().wrapContentSize(Alignment.Center)) {
                             CatsCoMessageActionMenu(true, null, true, {}, {}, {}, {})
                         }
-                    } else CatsCoMorphingMenu(true, {}, {}, {}, {}, {})
+                    } else CatsCoHeaderActionMenu(true, {}, {}, {}, {}, {})
                 }
             }
         }
@@ -164,7 +185,7 @@ class MenuLayoutTest {
             }
         }
         captureContextMenu("capsule-large-type")
-        checkLabels(listOf("我的电脑", "新建任务", "云端文件", "刷新"))
+        checkLabels(listOf("我的电脑", "新建任务", "文件与应用", "刷新"))
         compose.runOnIdle { messageMenu = true }
         checkLabels(listOf("引用", "复制全文", "重新生成"))
         captureContextMenu("message-large-type")

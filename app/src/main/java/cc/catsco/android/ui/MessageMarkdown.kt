@@ -1,9 +1,11 @@
 package cc.catsco.android.ui
 
+private val code = Regex("(`{3,}|~{3,})[\\s\\S]*?(?:\\1|\\z)|(`+)[\\s\\S]*?\\2")
+private val spacedBold = Regex("(?<!\\\\)\\*\\*[\\p{Z}\\t]*((?:(?!\\r?\\n[\\p{Z}\\t]*\\r?\\n)[^*])+?)\\*\\*")
+
 /** Compatibility for Chinese bold punctuation that violates CommonMark delimiter rules. */
 internal fun normalizeMessageMarkdown(text: String): String {
-    val code = Regex("(`{3,}|~{3,})[\\s\\S]*?(?:\\1|\\z)|(`+)[\\s\\S]*?\\2")
-    val spacedBold = Regex("(?<!\\\\)\\*\\*[\\p{Z}\\t]*((?:(?!\\r?\\n[\\p{Z}\\t]*\\r?\\n)[^*])+?)\\*\\*")
+    if ("**" !in text) return text
     fun normalizePlain(value: String) = spacedBold.replace(value) { match ->
         val content = match.groupValues[1]
         if (content.any { it in '\u3400'..'\u9fff' && it.isLetter() }) {

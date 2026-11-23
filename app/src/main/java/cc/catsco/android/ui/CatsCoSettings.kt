@@ -1,7 +1,6 @@
 package cc.catsco.android.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -9,9 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -27,15 +24,22 @@ import coil.ImageLoader
 internal data class SettingsEntry(val label: String, val icon: Int? = null, val value: String? = null,
     val action: String? = label, val options: List<Pair<String, String>> = emptyList())
 
+internal const val HiddenTasksSettingsLabel = "本机隐藏的任务"
+
 @Composable
-internal fun NativeSettings(state: WorkspaceState, imageLoader: ImageLoader, open: (String) -> Unit) {
+internal fun NativeSettings(
+    state: WorkspaceState,
+    imageLoader: ImageLoader,
+    hasHiddenTasks: Boolean = false,
+    open: (String) -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
         item(key = "account") {
-            Column(Modifier.fillMaxWidth().clickable(role = Role.Button) { open("个人资料") }.padding(vertical = 20.dp),
+            Column(Modifier.fillMaxWidth().catsCoActionClickable { open("个人资料") }.padding(vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     CatsCoAccountAvatar(state.session, imageLoader, Modifier.size(72.dp))
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -55,16 +59,13 @@ internal fun NativeSettings(state: WorkspaceState, imageLoader: ImageLoader, ope
             ), open)
         }
         item(key = "preferences") {
-            SettingsGroup("应用偏好", listOf(
-                SettingsEntry("外观", R.drawable.e_contrast, when (state.appearance) {
-                    "dark" -> "深色"
-                    "light" -> "浅色"
-                    else -> "跟随系统"
-                }, options = listOf("appearance/system" to "跟随系统", "appearance/light" to "浅色", "appearance/dark" to "深色")),
-                SettingsEntry("消息通知", R.drawable.e_notifications),
-                SettingsEntry("桌面组件", R.drawable.e_widgets, action = "实时活动与组件"),
-                SettingsEntry("缓存与草稿", R.drawable.e_download, action = "离线与分享草稿"),
-            ), open)
+            SettingsGroup("应用偏好", buildList {
+                add(SettingsEntry(PersonalizationTitle, R.drawable.e_contrast, action = "appearance"))
+                add(SettingsEntry("消息通知", R.drawable.e_notifications))
+                add(SettingsEntry("桌面组件", R.drawable.e_widgets, action = "实时活动与组件"))
+                add(SettingsEntry("缓存与草稿", R.drawable.e_download, action = "离线与分享草稿"))
+                if (hasHiddenTasks) add(SettingsEntry(HiddenTasksSettingsLabel, R.drawable.message_eye_off))
+            }, open)
         }
         item(key = "agents-and-devices") {
             SettingsGroup("工作空间", listOf(
@@ -80,17 +81,17 @@ internal fun NativeSettings(state: WorkspaceState, imageLoader: ImageLoader, ope
                 SettingsEntry("反馈", R.drawable.e_chat),
                 SettingsEntry("打开网页版", R.drawable.e_external, action = "打开 WebApp"),
                 SettingsEntry("服务器", R.drawable.e_language),
-            ), open)
+            ) + listOfNotNull(if (BuildConfig.DEBUG) SettingsEntry("检查更新", R.drawable.e_refresh) else null), open)
         }
         item(key = "logout") {
             Surface(
-                onClick = { open("logout") },
                 shape = CatsCoMobileSpec.settingsGroupShape,
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(.5.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Box(Modifier.heightIn(min = CatsCoMobileSpec.settingsRowHeight).padding(16.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().heightIn(min = CatsCoMobileSpec.settingsRowHeight)
+                    .catsCoActionClickable { open("logout") }.padding(16.dp), contentAlignment = Alignment.Center) {
                     Text("退出登录", fontSize = CatsCoMobileSpec.settingsText, fontWeight = FontWeight.Medium)
                 }
             }
@@ -125,9 +126,11 @@ internal fun SettingsGroup(title: String, entries: List<SettingsEntry>, open: (S
                     Box {
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = CatsCoMobileSpec.settingsRowHeight)
-                            .then(if (entry.action != null) Modifier.clickable(role = Role.Button) {
-                                if (entry.options.isEmpty()) open(entry.action) else expanded = true
-                            } else Modifier)
+                            .then(when {
+                                entry.options.isNotEmpty() -> Modifier.catsCoDisclosureClickable(expanded) { expanded = true }
+                                entry.action != null -> Modifier.catsCoActionClickable { open(entry.action) }
+                                else -> Modifier
+                            })
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -138,15 +141,21 @@ internal fun SettingsGroup(title: String, entries: List<SettingsEntry>, open: (S
                         Text(entry.label, Modifier.weight(1f), fontSize = CatsCoMobileSpec.settingsText, lineHeight = 24.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         entry.value?.let { value ->
                             Spacer(Modifier.width(8.dp))
-                            SelectionContainer {
+                            val valueText: @Composable () -> Unit = {
                                 Text(value, Modifier.widthIn(max = 160.dp), fontSize = 14.sp,
                                     lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.End)
                             }
+                            if (entry.action == null) SelectionContainer { valueText() } else valueText()
                         }
                         if (entry.action != null) {
                             Spacer(Modifier.width(10.dp))
-                            Icon(painterResource(R.drawable.e_expand), null, Modifier.size(CatsCoMobileSpec.actionIconSize).graphicsLayer { rotationZ = -90f }, tint = MaterialTheme.colorScheme.onSurface)
+                            if (entry.options.isNotEmpty()) {
+                                CatsCoDisclosureChevron(expanded, tint = MaterialTheme.colorScheme.onSurface)
+                            } else {
+                                Icon(painterResource(R.drawable.e_chevron_right), null,
+                                    Modifier.size(CatsCoMobileSpec.actionIconSize), tint = MaterialTheme.colorScheme.onSurface)
+                            }
                         }
                     }
                     CatsCoMenuPopup(expanded, { expanded = false }, width = 208.dp) {

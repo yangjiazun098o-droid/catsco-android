@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application>
         <activity android:name=".MenuTestActivity" android:exported="false" />
         <activity android:name=".MessageReviewActivity" android:exported="true" />
+        <activity android:name=".NotificationReviewActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".MotionReviewActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
+        <meta-data android:name="cc.catsco.preview.SOURCE" android:value="git:${previewRevision}" />
     </application>
 </manifest>

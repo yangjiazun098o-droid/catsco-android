@@ -20,8 +20,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import cc.catsco.android.WorkspaceState
+import cc.catsco.android.PendingSend
 import cc.catsco.android.WorkspaceViewModel
+import cc.catsco.android.conversationRunning
 import cc.catsco.android.data.MessageTurn
+import cc.catsco.android.data.MessagePresentationCache
+import cc.catsco.android.data.projectMessages
+import cc.catsco.core.ChatMessage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.withContext
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.SoftBreakAddsNewLinePlugin
@@ -42,25 +50,79 @@ import org.commonmark.ext.gfm.tables.TableCell
 
 internal val LocalOpenSidebar = staticCompositionLocalOf<(() -> Unit)?> { null }
 
+private data class ProjectionInput(val messages: List<ChatMessage>, val names: Map<String, String>, val followups: Set<Long>)
+private data class ConversationProjection(val turns: List<MessageTurn>, val messages: List<ChatMessage>)
+
+// CommonMark nodes contain content only. Keep them within the current conversation.
+private class MarkdownDocuments {
+    private val parser = org.commonmark.parser.Parser.builder()
+        .extensions(listOf(org.commonmark.ext.gfm.tables.TablesExtension.create())).build()
+    private val documents = object : android.util.LruCache<String, List<Node>>(192_000) {
+        override fun sizeOf(key: String, value: List<Node>) = key.length.coerceAtLeast(1)
+    }
+    fun cached(text: String): List<Node>? = documents.get(text)
+    fun parse(text: String): List<Node> = cached(text) ?: parser.parse(normalizeMessageMarkdown(text)).children()
+        .also { documents.put(text, it) }
+}
+private val LocalMarkdownDocuments = staticCompositionLocalOf<MarkdownDocuments?> { null }
+
 @Composable
 fun ConversationScreen(state: WorkspaceState, model: WorkspaceViewModel, modifier: Modifier = Modifier,
-    onOpenSidebar: (() -> Unit)? = null, topContentPadding: Dp = 0.dp) {
+    onOpenSidebar: (() -> Unit)? = null, topContentPadding: Dp = 0.dp,
+    onMessagesBehindHeader: ((Boolean) -> Unit)? = null) {
     val topic = state.page.removePrefix("chat/")
     val userId = state.session?.userId.orEmpty()
     val agents = state.workspace.employees
-    val turns = remember(state.messages, userId, agents) {
-        cc.catsco.android.data.presentMessages(state.messages, userId, agents.map { it.id }.toSet(), agents.associate { it.id to it.name })
+    val followups = state.conversationFollowups[topic]
+    val followupIds = remember(state.messages, userId, followups) {
+        val pendingIds = followups?.pendingClientIds.orEmpty()
+        val sentIds = followups?.sentMessageIds.orEmpty()
+        if (pendingIds.isEmpty()) sentIds else state.messages.mapNotNullTo(sentIds.toMutableSet()) {
+            it.sequence.takeIf { sequence -> it.senderId == userId && sequence > 0 && it.clientId in pendingIds }
+        }
     }
+    val documents = remember(state.session?.server, userId, topic) { MarkdownDocuments() }
+    val names = remember(agents) { agents.associate { it.id to it.name } }
+    val input by rememberUpdatedState(ProjectionInput(state.messages, names, followupIds))
+    val projection = key(state.session?.server, userId, topic) {
+        produceState(ConversationProjection(emptyList(), emptyList())) {
+            val cache = MessagePresentationCache()
+            snapshotFlow { input }.conflate().collect { next ->
+                value = withContext(Dispatchers.Default) {
+                    val grouped = projectMessages(next.messages, userId, next.names.keys, next.names, next.followups, cache)
+                    grouped.lastOrNull()?.takeIf { it.assistant }?.text?.filter { it.length >= 1200 }?.forEach(documents::parse)
+                    ConversationProjection(grouped, next.messages)
+                }
+            }
+        }.value
+    }
+    val turns = projection.turns
     val activeTask = state.conversationRunning && state.messageTarget == 0L
+    val awaitingReply = topic in state.awaitingReplyAfter && state.messageTarget == 0L &&
+        turns.lastOrNull()?.let { !it.assistant && it.senderId == userId } == true
     val stopping = state.stoppingTopic == topic
     val agentId = state.workspace.conversations.find { it.id == topic }?.agentId
     val agentName = agents.find { it.id == agentId }?.name.orEmpty()
-    val displayTurns = remember(turns, userId, activeTask, agentId, agentName) {
-        conversationDisplayTurns(turns, activeTask, agentId.orEmpty(), agentName)
+    val displayTurns = remember(turns, activeTask, awaitingReply, agentId, agentName, followupIds) {
+        conversationDisplayTurns(turns, activeTask, agentId.orEmpty(), agentName, awaitingReply, followupIds)
     }
+    val currentPending = state.pendingSend?.takeIf { it.page == state.page }
+    var previousPending by remember(topic, userId) { mutableStateOf<PendingSend?>(null) }
+    SideEffect { if (currentPending != null) previousPending = currentPending }
+    val delivered = previousPending?.takeIf { send -> send.clientId.isNotBlank() &&
+        state.messages !== projection.messages && state.messages.any { it.senderId == userId && it.clientId == send.clientId } }
+    val pending = (currentPending ?: delivered)?.takeIf { send ->
+        send.page == state.page && (send.clientId.isEmpty() || projection.messages.none {
+            it.senderId == userId && it.sequence > 0 && it.clientId == send.clientId
+        })
+    }
+    val presentedTurns = remember(displayTurns, pending, userId) {
+        if (pending == null) displayTurns else displayTurns + pending.asTurn(userId)
+    }
+    val currentReplyKey = displayTurns.lastOrNull { it.assistant }?.key
     val showConnection = state.connection in setOf("未连接", "连接已断开", "正在重连")
     val hasHeader = state.messageTarget > 0 || showConnection
-    CompositionLocalProvider(LocalOpenSidebar provides onOpenSidebar) {
+    CompositionLocalProvider(LocalOpenSidebar provides onOpenSidebar, LocalMarkdownDocuments provides documents) {
         Column(modifier.fillMaxSize()) {
             if (hasHeader) Spacer(Modifier.height(topContentPadding))
             if (state.messageTarget > 0) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -71,48 +133,73 @@ fun ConversationScreen(state: WorkspaceState, model: WorkspaceViewModel, modifie
                 Text(state.connection, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             ConversationTimeline(
-                topic, displayTurns, userId, state.loadingMessages, state.hasMore,
+                topic, presentedTurns, userId, state.loadingMessages || (turns.isEmpty() && state.messages.isNotEmpty()), state.hasMore,
                 onLoadOlder = { model.loadMessages(older = true) },
                 modifier = Modifier.weight(1f),
                 emptyText = if (state.preview) "调试预览不读取真实消息，请使用账号登录。" else "还没有消息，输入内容开始任务。",
                 targetMessageId = state.messageTarget,
+                localSendRevision = state.localSendRevision,
                 topContentPadding = if (hasHeader) 0.dp else topContentPadding,
+                loadingOlder = state.loadingOlderMessages,
+                olderLoadFailed = state.olderMessagesFailed,
+                onMessagesBehindHeader = onMessagesBehindHeader,
             ) { turn ->
                     MessageTurnContent(
                         turn = turn,
                         mine = turn.senderId == userId,
                         senderName = turn.senderName.ifBlank { agents.find { it.id == turn.senderId }?.name.orEmpty() },
-                        active = activeTask && turn.key == displayTurns.lastOrNull()?.key,
-                        filesEnabled = !state.busy && state.exportFile == null,
+                        active = (activeTask || awaitingReply) && turn.key == currentReplyKey,
+                        filesEnabled = !turn.pendingDelivery && !state.busy && state.exportFile == null,
                         onPreview = model::openAttachment,
                         onDownload = model::downloadAttachment,
+                        attachmentFailure = state.attachmentFailure,
                         onQuote = model::quoteMessage,
                         onRegenerate = model::regenerate,
                         regenerateEnabled = !state.busy && !state.sending && !state.uploading && !state.preview,
-                        stopping = stopping && turn.key == displayTurns.lastOrNull()?.key,
+                        stopping = stopping && turn.key == currentReplyKey,
+                        showSentReceipt = turn.messageId == followups?.lastSentMessageId && turn.messageId > 0,
                     )
             }
         }
     }
 }
 
+internal fun PendingSend.asTurn(userId: String) = MessageTurn(
+    key = "pending-send", senderId = userId, senderName = "", assistant = false,
+    steps = emptyList(), plan = emptyList(), progress = emptyList(), text = listOf(draft.text).filter(String::isNotBlank),
+    files = draft.attachments, executionState = "", streaming = false, quote = draft.quote, pendingDelivery = true,
+)
+
 /** Keep the live response's UI identity through waiting, streaming and persisted history. */
-internal fun conversationDisplayTurns(turns: List<MessageTurn>, active: Boolean, agentId: String, agentName: String): List<MessageTurn> {
+internal fun conversationDisplayTurns(turns: List<MessageTurn>, active: Boolean, agentId: String, agentName: String,
+    awaitingReply: Boolean = false, followupMessageIds: Set<Long> = emptySet()): List<MessageTurn> {
     var responseKey = "response:initial"
     var firstReply = true
-    val displayed = turns.map { turn ->
+    var pendingAfter = -1
+    val displayed = turns.mapIndexed { index, turn ->
         if (!turn.assistant) {
-            responseKey = "response:${turn.key}"
-            firstReply = true
+            val followup = turn.followup || turn.messageId in followupMessageIds
+            // A follow-up can arrive before the original reply has produced its first frame.
+            if (!followup || !firstReply) {
+                responseKey = "response:${turn.key}"
+                firstReply = true
+            }
+            if (!followup) pendingAfter = index
             turn
-        } else if (firstReply) {
-            firstReply = false
-            turn.copy(key = responseKey)
-        } else turn
+        } else {
+            pendingAfter = -1
+            if (firstReply) {
+                firstReply = false
+                turn.copy(key = responseKey)
+            } else turn
+        }
     }
-    if (!active || turns.lastOrNull()?.assistant == true) return displayed
+    if ((!active && !awaitingReply) || (pendingAfter < 0 && turns.isNotEmpty())) return displayed
     // A presentation-only waiting slot. It carries no message ID, body or persisted record.
-    return displayed + MessageTurn(responseKey, agentId, agentName, true, emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "", false)
+    return displayed.toMutableList().apply {
+        add(pendingAfter + 1, MessageTurn(responseKey, agentId, agentName, true, emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
+            if (active) "" else "awaiting_reply", false))
+    }
 }
 
 @Composable
@@ -144,8 +231,16 @@ fun MarkdownContent(text: String) {
             }
         }).build()
     }
-    val blocks = remember(text, renderer) { renderer.parse(normalizeMessageMarkdown(text)).children() }
-    MarkdownBlocks(renderer, blocks)
+    val docs = LocalMarkdownDocuments.current ?: remember { MarkdownDocuments() }
+    val ready = remember(docs, text) { docs.cached(text) ?: if (text.length < 1200) docs.parse(text) else null }
+    if (ready != null) {
+        MarkdownBlocks(renderer, ready)
+    } else {
+        val parsed by produceState<List<Node>?>(null, docs, text) {
+            value = withContext(Dispatchers.Default) { docs.parse(text) }
+        }
+        parsed?.let { MarkdownBlocks(renderer, it) } ?: Spacer(Modifier.height(25.dp))
+    }
 }
 
 @Composable
@@ -203,6 +298,7 @@ private fun MarkdownTable(renderer: Markwon, block: TableBlock) {
             entries.map { (section is TableHead) to it.children() }
         }
     }
+    var visibleRows by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(24) }
     val density = LocalDensity.current
     val fontPixels = with(density) { 15.sp.toPx() }
     val context = LocalContext.current
@@ -226,7 +322,7 @@ private fun MarkdownTable(renderer: Markwon, block: TableBlock) {
         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
             if (overflows) Text("左右滑动查看完整表格", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                rows.forEach { (header, cells) ->
+                rows.take(visibleRows).forEach { (header, cells) ->
                     Row(Modifier.width(total).background(if (header) MaterialTheme.colorScheme.onSurface.copy(alpha = .06f) else MaterialTheme.colorScheme.surface)) {
                         cells.forEachIndexed { column, cell ->
                             MarkdownText(renderer, cell, Modifier.width(widths[column]).padding(horizontal = 10.dp, vertical = 8.dp))
@@ -234,6 +330,9 @@ private fun MarkdownTable(renderer: Markwon, block: TableBlock) {
                     }
                     HorizontalDivider(Modifier.width(total), color = MaterialTheme.colorScheme.outlineVariant)
                 }
+            }
+            if (visibleRows < rows.size) TextButton(onClick = { visibleRows += 24 }) {
+                Text("显示接下来的 ${minOf(24, rows.size - visibleRows)} 行")
             }
         }
     }

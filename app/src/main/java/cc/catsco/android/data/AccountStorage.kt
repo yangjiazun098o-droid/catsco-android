@@ -20,16 +20,19 @@ class AccountStorage(context: Context) {
         .digest("${session.server.value}\n${session.userId}".toByteArray())
         .joinToString("") { "%02x".format(it) } + ":"
 
-    private fun key(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        return (store.getKey("catsco.workspace.v1", null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
-            init(KeyGenParameterSpec.Builder("catsco.workspace.v1", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
-        }.generateKey()
+    private companion object {
+        // The activity and scheduled checker share a single key even on first use.
+        val key: SecretKey by lazy {
+            val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            (store.getKey("catsco.workspace.v1", null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+                init(KeyGenParameterSpec.Builder("catsco.workspace.v1", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+            }.generateKey()
+        }
     }
 
     fun write(session: Session, name: String, value: String) {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
         val bytes = cipher.doFinal(value.toByteArray())
         val encoded = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(bytes, Base64.NO_WRAP)
         check(prefs.edit().putString(prefix(session) + name, encoded).commit()) { "无法保存本机草稿。" }
@@ -40,7 +43,7 @@ class AccountStorage(context: Context) {
         return runCatching {
             val parts = raw.split(':', limit = 2)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
             String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)))
         }.getOrNull()
     }
@@ -50,15 +53,21 @@ class AccountStorage(context: Context) {
         val quote = value.optJSONObject("quote")?.takeIf { it.optLong("message_id") > 0 }?.let {
             MessageQuote(it.optLong("message_id"), it.optString("sender_name"), it.optString("text"))
         }
-        return ComposerDraft(value.optString("text"), value.objects("files").map(::attachment), value.optString("client_id"), value.optString("fingerprint"), value.optString("pending_agent"), quote)
+        return ComposerDraft(value.optString("text"), value.objects("files").map(::attachment), value.optString("client_id"), value.optString("fingerprint"), value.optString("pending_agent"), quote,
+            taskTitle = value.optString("task_title"), taskCreationId = value.optString("task_creation_id"), followup = value.optBoolean("task_followup"))
     }
 
     fun saveDraft(session: Session, topic: String, draft: ComposerDraft) = write(session, "draft:$topic", JSONObject()
         .put("text", draft.text).put("files", JSONArray(draft.attachments.map { JSONObject(it.raw) }))
         .put("client_id", draft.clientId).put("fingerprint", draft.fingerprint).put("pending_agent", draft.pendingTaskAgent)
+        .put("task_title", draft.taskTitle).put("task_creation_id", draft.taskCreationId).put("task_followup", draft.followup)
         .put("quote", draft.quote?.let { JSONObject().put("message_id", it.messageId).put("sender_name", it.senderName).put("text", it.text) }).toString())
 
     fun workspace(session: Session): Workspace = cachedWorkspace(session) ?: Workspace()
+
+    fun lastTaskEmployeeId(session: Session): String = read(session, "new-task:last-employee").orEmpty()
+
+    fun saveLastTaskEmployeeId(session: Session, id: String) = write(session, "new-task:last-employee", id)
 
     fun cachedWorkspace(session: Session): Workspace? {
         val value = read(session, "workspace")?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
@@ -68,7 +77,7 @@ class AccountStorage(context: Context) {
                     if (it.has("cloud") && !it.isNull("cloud")) it.optBoolean("cloud") else null,
                     it.optLong("createdAt"), it.optLong("addedAt"), it.optString("avatarUrl"), it.optString("username"))
             }.prioritizedForTasks(),
-            value.objects("conversations").map { Conversation(it.optString("id"), it.optString("name"), it.optString("preview"), false, it.optString("date"), it.optString("agentId"), it.optBoolean("task")) },
+            value.objects("conversations").map { Conversation(it.optString("id"), it.optString("name"), it.optString("preview"), false, it.optString("date"), it.optString("agentId"), it.optBoolean("task"), it.optString("projectId"), notificationsMuted = it.optBoolean("notifications_muted")) },
         )
     }
 
@@ -78,7 +87,11 @@ class AccountStorage(context: Context) {
                 .put("cloud", it.cloud ?: JSONObject.NULL).put("createdAt", it.createdAt).put("addedAt", it.addedAt)
                 .put("avatarUrl", it.avatarUrl).put("username", it.username)
         }))
-        .put("conversations", JSONArray(workspace.conversations.map { JSONObject().put("id", it.id).put("name", it.name).put("preview", it.preview).put("date", it.date).put("agentId", it.agentId).put("task", it.task) })).toString())
+        .put("conversations", JSONArray(workspace.conversations.map {
+            JSONObject().put("id", it.id).put("name", it.name).put("preview", it.preview).put("date", it.date)
+                .put("agentId", it.agentId).put("task", it.task).put("projectId", it.projectId)
+                .put("notifications_muted", it.notificationsMuted)
+        })).toString())
 
     fun clear(session: Session) {
         val prefix = prefix(session)

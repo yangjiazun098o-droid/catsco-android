@@ -7,7 +7,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
@@ -21,27 +20,30 @@ import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.constrainHeight
 import kotlin.math.roundToInt
 
+private val bubbleOpeningEasing = CubicBezierEasing(.2f, .8f, .2f, 1f)
+
 /** Measure the reply at its reading width while its single surface opens from the loader. */
 @Composable
 internal fun AgentReplyBubble(loading: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit = {}) {
     val phase = remember { Animatable(if (loading) 0f else 1f) }
     LaunchedEffect(loading) {
         if (loading) phase.snapTo(0f)
-        else phase.animateTo(1f, tween(240, easing = LinearEasing))
+        else phase.animateTo(1f, tween(155, easing = LinearEasing))
     }
-    val opening = CubicBezierEasing(.2f, .8f, .2f, 1f).transform(phase.value)
+    val showDots by remember(phase) { derivedStateOf { phase.value < .62f } }
     Surface(
         modifier.testTag(if (loading) "agent-loading-bubble" else "agent-response-bubble"),
-        shape = RoundedCornerShape((12f + 3f * opening).dp),
-        color = MaterialTheme.colorScheme.surface,
+        shape = AgentBubbleShape,
+        color = conversationBubbleColor(mine = false),
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Layout(content = {
             Box(Modifier.fillMaxWidth().graphicsLayer {
-                alpha = ((phase.value - .12f) / .6f).coerceIn(0f, 1f)
+                alpha = ((phase.value - .30f) / .62f).coerceIn(0f, 1f)
             }) { content() }
-            if (phase.value < 1f) {
+            if (showDots) {
                 Box(Modifier.size(68.dp, 42.dp).graphicsLayer {
-                    alpha = (1f - phase.value * 3f).coerceIn(0f, 1f)
+                    alpha = (1f - ((phase.value - .22f) / .40f)).coerceIn(0f, 1f)
                 }, contentAlignment = Alignment.Center) { AgentExchangeDots() }
             }
         }) { measurables, constraints ->
@@ -49,6 +51,7 @@ internal fun AgentReplyBubble(loading: Boolean, modifier: Modifier = Modifier, c
             val dots = measurables.getOrNull(1)?.measure(constraints.copy(minWidth = 0, minHeight = 0))
             val smallWidth = 68.dp.roundToPx().coerceAtMost(constraints.maxWidth)
             val smallHeight = 42.dp.roundToPx()
+            val opening = bubbleOpeningEasing.transform(phase.value)
             val width = constraints.constrainWidth((smallWidth + (body.width - smallWidth) * opening).roundToInt())
             val height = constraints.constrainHeight((smallHeight + (body.height - smallHeight) * opening).roundToInt())
             layout(width, height) {

@@ -1,5 +1,8 @@
 package cc.catsco.core
 
+private const val LATEST_HISTORY_LIMIT = 50
+private const val HISTORY_BACKFILL_LIMIT = 200
+
 data class Attachment(val name: String, val url: String, val mime: String, val raw: String)
 
 data class ChatMessage(
@@ -29,6 +32,12 @@ class MessageTimeline {
     private val finalized = mutableSetOf<String>()
     private val plans = linkedMapOf<String, ChatMessage>()
     val messages: List<ChatMessage> get() = records.values.sortedBy { it.sequence } + streams.values + plans.values
+    var historySyncedThrough: Long = 0
+        private set
+
+    fun markHistorySyncedThrough(sequence: Long) {
+        historySyncedThrough = maxOf(historySyncedThrough, sequence)
+    }
 
     fun receive(message: ChatMessage) {
         if (message.kind == "runtime_plan") {
@@ -62,6 +71,27 @@ class MessageTimeline {
     fun merge(history: List<ChatMessage>) = history.sortedBy { it.sequence }.forEach(::receive)
 }
 
+data class MessageHistoryPage(val messages: List<ChatMessage>, val beforeId: Long, val hasMore: Boolean)
+
+/** Reconnect the latest page to the last HTTP snapshot, even when live messages have arrived ahead of it. */
+suspend fun loadLatestHistory(
+    syncedThrough: Long,
+    fetchPage: suspend (beforeId: Long, limit: Int) -> MessageHistoryPage,
+): MessageHistoryPage {
+    val latest = fetchPage(0, LATEST_HISTORY_LIMIT)
+    if (syncedThrough <= 0 || !latest.hasMore || latest.beforeId <= syncedThrough) return latest
+
+    val messages = latest.messages.toMutableList()
+    var page = latest
+    while (page.hasMore && page.beforeId > syncedThrough) {
+        val older = fetchPage(page.beforeId, HISTORY_BACKFILL_LIMIT)
+        check(!older.hasMore || older.beforeId in 1 until page.beforeId) { "消息同步暂未完成，请重试。" }
+        messages.addAll(older.messages)
+        page = older
+    }
+    return page.copy(messages = messages)
+}
+
 data class MessageQuote(val messageId: Long, val senderName: String, val text: String)
 
 data class ComposerDraft(
@@ -71,4 +101,7 @@ data class ComposerDraft(
     val fingerprint: String = "",
     val pendingTaskAgent: String = "",
     val quote: MessageQuote? = null,
+    val taskTitle: String = "",
+    val taskCreationId: String = "",
+    val followup: Boolean = false,
 )

@@ -5,7 +5,11 @@
     <TextView android:fontFamily="@font/alibaba_puhuiti" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:text="CatsCo" android:textSize="20sp" android:textStyle="bold" android:textColor="#147C65" />
     <TextView android:fontFamily="@font/alibaba_puhuiti" android:id="@+id/widget_tasks" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
-        android:layout_marginTop="12dp" android:textSize="14sp" android:textColor="#1F1F1F" android:maxLines="7" android:ellipsize="end" />
+        android:gravity="center_vertical" android:textSize="14sp" android:textColor="#1F1F1F" android:maxLines="1" android:ellipsize="end" />
+    <TextView android:fontFamily="@font/alibaba_puhuiti" android:id="@+id/widget_task_second" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:gravity="center_vertical" android:textSize="14sp" android:textColor="#1F1F1F" android:maxLines="1" android:ellipsize="end" />
+    <TextView android:fontFamily="@font/alibaba_puhuiti" android:id="@+id/widget_task_third" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:gravity="center_vertical" android:textSize="14sp" android:textColor="#1F1F1F" android:maxLines="1" android:ellipsize="end" />
     <TextView android:fontFamily="@font/alibaba_puhuiti" android:id="@+id/widget_sync" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginTop="8dp" android:textSize="12sp" android:textColor="#747479" />
 </LinearLayout>

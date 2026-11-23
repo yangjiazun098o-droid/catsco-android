@@ -77,6 +77,7 @@ internal fun ModuleTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     errorMessage: String? = null,
+    maxLines: Int = Int.MAX_VALUE,
 ) {
     var visited by remember { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
@@ -97,7 +98,7 @@ internal fun ModuleTextField(
             focused = it.isFocused
             if (it.isFocused) visited = true
         }.padding(top = labelPadding).defaultMinSize(minHeight = 56.dp), enabled = enabled,
-        singleLine = singleLine, minLines = minLines,
+        singleLine = singleLine, minLines = minLines, maxLines = maxLines,
         interactionSource = interaction,
         cursorBrush = SolidColor(MaterialTheme.colorScheme.onSurface),
         textStyle = TextStyle(fontFamily = CatsCoFontFamily, fontSize = 16.sp, lineHeight = 24.sp, color = MaterialTheme.colorScheme.onSurface),
@@ -168,12 +169,15 @@ internal fun ModuleLoading() {
 
 @Composable
 internal fun ModuleInfo(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), fontSize = 16.sp, lineHeight = 24.sp)
-        SelectionContainer(Modifier.weight(1.5f)) {
-            Text(value, Modifier.fillMaxWidth(), fontSize = 16.sp, lineHeight = 24.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End)
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val labelLimit = maxWidth * .45f
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, Modifier.widthIn(max = labelLimit), fontSize = 16.sp, lineHeight = 24.sp)
+            SelectionContainer(Modifier.weight(1f)) {
+                Text(value, Modifier.fillMaxWidth(), fontSize = 16.sp, lineHeight = 24.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End)
+            }
         }
     }
 }
@@ -203,27 +207,20 @@ internal fun skillPublisher(skill: JSONObject): String {
 internal fun skillVersion(skill: JSONObject): String = (skill.optJSONObject("version") ?: skill)
     .first("latestVersion", "latest_version", "version")
 
-internal fun skillCatalogueTitle(skill: JSONObject): String = searchSnippetText(skill.first("description", "summary"))
-    .ifBlank { skill.first("displayName", "display_name", "title", "name", "skillId", "skill_id", "id") }
+internal fun skillCatalogueTitle(skill: JSONObject): String =
+    skill.first("displayName", "display_name", "title", "name", "skillId", "skill_id", "id").ifBlank { "未命名技能" }
 
-internal fun skillCatalogueMetadata(skill: JSONObject, status: String): String {
-    val name = skill.first("displayName", "display_name", "title", "name", "skillId", "skill_id", "id")
-    val identity = if (name != skillCatalogueTitle(skill)) name else skillPublisher(skill).takeIf(String::isNotBlank)?.let { "发布者 $it" }.orEmpty()
-    val version = skillVersion(skill).takeIf(String::isNotBlank)?.let { "v$it" }.orEmpty()
-    return listOf(identity, listOf(version, status).filter(String::isNotBlank).joinToString(" · "))
-        .filter(String::isNotBlank).joinToString("\n")
-}
+internal fun skillCatalogueDescription(skill: JSONObject): String =
+    searchSnippetText(skill.first("summary", "description"))
 
-internal fun skillConfigurationStatus(skill: JSONObject, references: List<JSONObject>): String {
-    val id = skill.first("skillId", "skill_id", "id")
-    val reference = references.find { it.first("skillId", "skill_id") == id } ?: return "未配置"
+internal fun skillCatalogueStatus(skill: JSONObject, reference: JSONObject?, showAdded: Boolean): String {
+    if (reference == null) return ""
     val current = reference.first("version")
     val latest = skillVersion(skill)
     return when {
-        current.isBlank() -> "已配置，版本待核对"
-        latest.isBlank() -> "已配置 v$current"
-        current == latest -> "已配置此版本"
-        else -> "已配置 v$current · 可更新"
+        current.isNotBlank() && latest.isNotBlank() && current != latest -> "可更新"
+        showAdded -> "已添加"
+        else -> ""
     }
 }
 

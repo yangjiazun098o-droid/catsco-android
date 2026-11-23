@@ -6,6 +6,8 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import cc.catsco.core.*
 import org.json.JSONObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -32,11 +34,19 @@ class KeystoreSessionStore(context: Context) : SessionStore {
             Session(ServerAddress.parse(json.getString("server")), json.getString("token"), json.getString("uid"), json.getString("name"), json.optString("avatar_url"))
         } catch (_: Exception) { clear(); null }
     }
-    override fun write(session: Session) {
+    private fun seal(session: Session): String {
         val json = JSONObject().put("server", session.server.value).put("token", session.token).put("uid", session.userId).put("name", session.name).put("avatar_url", session.avatarUrl)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         val encrypted = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
-        check(prefs.edit().putString("value", Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP)).commit()) { "无法保存登录状态。" }
+        return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP)
+    }
+    override fun write(session: Session) {
+        check(prefs.edit().putString("value", seal(session)).commit()) { "无法保存登录状态。" }
+    }
+    suspend fun save(session: Session) {
+        // Cancellation during encryption must not put an old token back after logout.
+        val value = withContext(Dispatchers.IO) { seal(session) }
+        prefs.edit().putString("value", value).apply()
     }
     override fun clear() { check(prefs.edit().clear().commit()) { "无法清除登录状态。" } }
 }

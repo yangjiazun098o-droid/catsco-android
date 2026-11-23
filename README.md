@@ -4,6 +4,8 @@
 
 安卓手机可从 [GitHub Releases](https://github.com/yangjiazun098o-droid/catsco-android/releases) 下载测试版 APK，安装后用自己的 CatsCo 账号登录。最低支持 Android 8。
 
+从 Preview 3 开始，测试版可在「设置 → 帮助与连接 → 检查更新」直接下载最新的完整安装包。发布时，从已推送的干净提交构建 `:app:assembleDebug -PcatscoPreviewNumber=N -PcatscoPreviewRevision=<40 位提交 SHA>`，递增 N 并沿用测试版签名。执行 `scripts/publish-preview.ps1 -PreviewNumber N -Apk <CatsCo-Android-Preview.apk> -Notes <release-notes.md>` 后，脚本会核对 APK 内的包名、版本、提交和上一期签名，将预发行标签指向对应提交，并在验证下载文件后更新检查清单。
+
 安卓原生工程，Kotlin + Jetpack Compose。视觉与结构参照 `buildsense-ai/catsco-ios` 的 `3fcb674c94dc1b6349878125b0a2a44244914383`，详见 [来源记录](docs/PROVENANCE.md)。
 
 ## 工程结构
@@ -21,13 +23,13 @@
 
 从公开仓库直接构建会使用 Noto Sans SC 和 Lucide 图标。仓库同时提供 25 个项目图标的 [SVG 源文件](design-assets/icons/svg) 和对应的 Android 矢量资源。[公开版资源与许可](app/src/publicAssets/README.md)
 
-如需构建使用普惠体和原图标的内部版本，从有权使用的完整工程副本一次导入 4 个字体文件及 29 个图标文件。命令会先核对所有文件的 SHA-256，再写入 Android 资源目录。[原图标清单](design-assets/icons/manifest.json)
+如需构建使用普惠体和原图标的内部版本，从有权使用的完整工程副本一次导入 5 个字体文件及 29 个图标文件。命令会先核对所有文件的 SHA-256，再写入 Android 资源目录。[原图标清单](design-assets/icons/manifest.json)
 
 ```sh
 python scripts/restore-mobile-assets.py /path/to/full-catsco-android
 ```
 
-阿里巴巴普惠体 2.0 的 Regular、Medium、SemiBold 和 Bold 也可通过官方渠道单独获取。将四个 TTF 按 [字体清单](design-assets/fonts/manifest.json) 的 `resource` 字段命名并置于 `app/src/main/res/font/`。如果使用工程原配格式的 ZIP，可以运行 `python scripts/import-puhuiti.py <字体ZIP路径>`。[阿里巴巴字体官网](https://www.alibabafonts.com/)
+阿里巴巴普惠体 2.0 的 Light、Regular、Medium、SemiBold 和 Bold 也可通过官方渠道单独获取。将五个 TTF 按 [字体清单](design-assets/fonts/manifest.json) 的 `resource` 字段命名并置于 `app/src/main/res/font/`。如果使用工程原配格式的 ZIP，可以运行 `python scripts/import-puhuiti.py <字体ZIP路径>`。[阿里巴巴字体官网](https://www.alibabafonts.com/)
 
 ### 构建与验证
 
@@ -35,7 +37,7 @@ python scripts/restore-mobile-assets.py /path/to/full-catsco-android
 ./gradlew.bat :core:test :app:assembleDebug :app:lintDebug
 ```
 
-macOS 和 Linux 使用 `./gradlew`。真机或模拟器连接后执行 `:app:connectedDebugAndroidTest`。GitHub Actions 使用公开版资源构建并运行核心测试和 Android Lint。
+macOS 和 Linux 使用 `./gradlew`。真机或模拟器连接后执行 `:app:connectedDebugAndroidTest`。普通调试构建默认为 Preview 17，可用 `-PcatscoPreviewNumber=N` 覆盖。GitHub Actions 使用公开版资源构建 Debug 和 Release，运行核心与应用单元测试、Android Lint，并在 Android 15 模拟器上运行设备测试。
 
 Debug APK：`app/build/outputs/apk/debug/app-debug.apk`，调试应用 ID `cc.catsco.android.debug`，与未来正式版分开安装。Release ID 暂定 `cc.catsco.android`；第一次上架前由所有者确认，之后不要随意更改。
 

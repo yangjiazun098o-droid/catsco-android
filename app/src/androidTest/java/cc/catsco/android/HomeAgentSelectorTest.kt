@@ -154,6 +154,25 @@ class HomeAgentSelectorTest {
         compose.runOnIdle { assertEquals("3", selected) }
     }
 
+    @Test fun horizontalSwipesSelectNeighborsAndFollowPickerSelection() {
+        show()
+        val card = compose.onNodeWithTag("home-agent-card")
+        card.performTouchInput { swipeLeft() }
+        compose.runOnIdle { assertEquals("3", selected); assertFalse(visible); assertEquals("", settings) }
+        card.performTouchInput { swipeRight() }
+        compose.runOnIdle { assertEquals("2", selected) }
+
+        card.performTouchInput { longClick() }
+        compose.onNodeWithTag("agent-picker-list").performScrollToNode(hasTestTag("agent-option-18"))
+        compose.onNodeWithTag("agent-option-18").performClick()
+        card.performTouchInput { swipeLeft() }
+        compose.runOnIdle { assertEquals("18", selected); assertFalse(visible) }
+        card.performTouchInput { swipeRight() }
+        compose.runOnIdle { assertEquals("17", selected) }
+        card.performClick()
+        compose.runOnIdle { assertEquals("17", settings) }
+    }
+
     @Test fun homeDisplaysTheSelectedAgentsConfiguredAvatar() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val avatarUrl = "https://images.example.test/configured-agent.png"
