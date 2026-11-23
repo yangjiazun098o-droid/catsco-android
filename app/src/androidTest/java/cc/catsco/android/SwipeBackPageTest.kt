@@ -114,12 +114,13 @@ class SwipeBackPageTest {
             moveTo(Offset(width * .8f, height * .6f), 400)
         }
         compose.runOnIdle { assertEquals("details", page); assertEquals(0, backs) }
-        val visibleOffset = compose.onNodeWithTag("swipe-back-page").getUnclippedBoundsInRoot().left
-        assertTrue("Expected a restrained drag when the destination has no snapshot: $visibleOffset", visibleOffset > 0.dp)
+        Thread.sleep(80)
         val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
         try {
             val pixels = screenshot.asImageBitmap().toPixelMap()
+            val edge = pixels[(pixels.width * .02f).toInt(), (pixels.height * .6f).toInt()]
             val left = pixels[(pixels.width * .1f).toInt(), (pixels.height * .6f).toInt()]
+            assertTrue("The page should move enough to expose the neutral edge: $edge", edge.blue <= edge.green * 2)
             assertTrue("The outgoing page should still fill the left side: $left", left.blue > left.green * 2)
         } finally { screenshot.recycle() }
         compose.onRoot().performTouchInput { up() }
