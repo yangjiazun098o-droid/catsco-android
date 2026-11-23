@@ -20,6 +20,7 @@ import cc.catsco.android.ui.desktopPlanOverview
 import cc.catsco.core.ServerAddress
 import cc.catsco.core.Session
 import cc.catsco.core.WorkspaceRepository
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
@@ -125,6 +126,29 @@ class CommercialPurchaseTest {
         assertNull(desktopPlanOverview(plan.put("model_credit_units", 22_500_000_000L).put("price_fen", 19900)))
     }
 
+    @Test fun revisitingPlansShowsCachedContentWhilePurchasesWaitForFreshCatalog() = withFixture { model, fixture ->
+        click("购买套餐")
+        see("协作套餐")
+        val blocked = CompletableDeferred<Unit>()
+        try {
+            compose.runOnIdle {
+                fixture.catalogGate = blocked
+                model.back()
+                model.navigate("commercial-plans")
+                assertTrue(model.state.value.resource.loaded)
+                assertTrue(model.state.value.resource.loading)
+                model.createCommercialPurchase(CommercialPurchase("协作套餐", 3900, 2)) { fail(it) }
+                assertFalse(model.state.value.busy)
+            }
+            compose.onNodeWithText("选择套餐").assertIsNotEnabled()
+            assertTrue(fixture.posted.isEmpty())
+        } finally {
+            blocked.complete(Unit)
+        }
+        compose.waitUntil(8_000) { !model.state.value.resource.loading }
+        compose.onNodeWithText("选择套餐").assertIsEnabled()
+    }
+
     @Test fun amountsAreExactAndOnlyTheExpectedCheckoutCanOpen() {
         assertEquals(1029L, amountInFen("10.29"))
         assertNull(amountInFen("10.299"))
@@ -208,13 +232,16 @@ class CommercialPurchaseTest {
         var order = JSONObject()
         @Volatile var status = "pending"
         @Volatile var desktopCatalog = false
+        var catalogGate: CompletableDeferred<Unit>? = null
         var loseFirstResponse = false
         var cancelledOrder = ""
 
         override suspend fun resource(session: Session, path: String, query: Map<String, String>, method: String, body: String?): String =
             when (path) {
                 "/api/relay/commercial" -> """{"summary":{"entitlements":[{"plan_id":1,"plan_name":"基础套餐","state":"active"}]}}"""
-                "/api/relay/commercial/catalog" -> if (desktopCatalog) """
+                "/api/relay/commercial/catalog" -> {
+                    catalogGate?.await()
+                    if (desktopCatalog) """
                     {"enabled":true,"payment_configured":true,"channels":[{"id":"alipay_page"}],
                      "plans":[{"id":1,"slug":"catsco-credit-v1-monthly","name":"入门版","price_fen":3900,"currency":"CNY",
                                 "duration_days":30,"plan_tier":1,"model_credit_units":4000000000},
@@ -232,6 +259,7 @@ class CommercialPurchaseTest {
                      "credit_topup":{"enabled":true,"min_amount_fen":100,"max_amount_fen":100000,
                                      "credits_per_cny":100,"presets_fen":[1000,5000,10000]}}
                 """.trimIndent()
+                }
                 "/api/relay/credits" -> """{"enabled":true,"units_per_credit":1000000,"paid_units":1250000000}"""
                 CommercialOrdersPath -> {
                     if (method == "POST") {

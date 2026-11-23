@@ -180,9 +180,11 @@ fun WorkspaceModuleScreen(state: WorkspaceState, model: WorkspaceViewModel, init
             }
             page == "offline" -> ModuleForm {
                 ModuleSection {
-                    Text("缓存与草稿已加密。", fontSize = 15.sp, lineHeight = 24.sp)
-                    ConfirmAction("清除缓存与草稿", state.busy, danger = false,
-                        description = "将删除此账号在当前服务器下的本机缓存和未发送草稿，云端消息可重新同步。", action = model::clearOfflineData)
+                    Text("清理当前账号存储在本机的会话缓存和附件。云端消息可重新同步。", fontSize = 15.sp, lineHeight = 24.sp)
+                    ConfirmAction("清除本机缓存", state.busy, danger = false,
+                        description = "将清除已下载的会话缓存和附件，未发送的草稿会保留。") { model.clearOfflineData(includeDrafts = false) }
+                    ConfirmAction("清除缓存与草稿", state.busy, danger = true,
+                        description = "将清除已下载的会话缓存、附件和未发送的草稿。") { model.clearOfflineData(includeDrafts = true) }
                 }
             }
             page == "relay-key" -> RelayCredentials(state, model)

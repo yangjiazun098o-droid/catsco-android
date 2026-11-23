@@ -44,12 +44,13 @@ internal class AttachmentFiles(private val root: File, private val client: OkHtt
             val directory = account(session).apply { mkdirs() }
             val key = digest(url.toString() + "\n" + attachment.name + "\n" + attachment.mime)
             val now = System.currentTimeMillis()
-            trim(now)
             val cached = directory.listFiles()?.firstOrNull { file ->
-                file.name.startsWith("$key-") && (file.nameWithoutExtension.substringAfterLast('-').toLongOrNull() ?: 0L) > now
+                file.isFile && file.name.startsWith("$key-") &&
+                    (file.nameWithoutExtension.substringAfterLast('-').toLongOrNull() ?: 0L) > now
             }
             val mimeTypes = MimeTypeMap.getSingleton()
             if (cached != null) {
+                if (now - cached.lastModified() > 60_000L) cached.setLastModified(now)
                 val mime = if (attachment.mime == "application/octet-stream") mimeTypes.getMimeTypeFromExtension(cached.extension) ?: attachment.mime else attachment.mime
                 return@withLock cached to mime
             }
@@ -61,6 +62,7 @@ internal class AttachmentFiles(private val root: File, private val client: OkHtt
             client.newCall(request.build()).execute().use { response ->
                 if (response.code in setOf(401, 403)) error("此文件的访问权限已失效，请重新获取文件。")
                 if (!response.isSuccessful) error("无法获取文件（${response.code}），请稍后重试。")
+                val receivedAt = System.currentTimeMillis()
                 val body = response.body ?: error("文件内容为空。")
                 val limit = 100L * 1024 * 1024
                 require(body.contentLength() <= limit) { "文件超过 100 MB，请在网页版打开。" }
@@ -89,9 +91,10 @@ internal class AttachmentFiles(private val root: File, private val client: OkHtt
                         cache.maxAgeSeconds >= 0 -> (cache.maxAgeSeconds.toLong() - ageSeconds).coerceIn(0L, 600L)
                         else -> 600L
                     }
-                    val target = File(directory, "$key-${tmp.nameWithoutExtension}-${now + lifetime * 1000}.$extension")
+                    val storedAt = System.currentTimeMillis()
+                    val target = File(directory, "$key-${tmp.nameWithoutExtension}-${receivedAt + lifetime * 1000}.$extension")
                     check(tmp.renameTo(target)) { "无法保存附件，请检查可用空间。" }
-                    trim(now, target)
+                    trim(storedAt, target)
                     target to mime
                 } catch (error: java.io.IOException) {
                     if (error.message.orEmpty().contains("ENOSPC", ignoreCase = true)) {

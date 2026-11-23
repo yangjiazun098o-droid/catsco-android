@@ -39,9 +39,15 @@ class AttachmentAndTaskAppTest {
             val account = Session(ServerAddress.parse("https://api.test"), "local", "1", "one")
             val file = Attachment("demo.txt", "https://files.test/demo", "text/plain", "")
             val first = cache.read(account, file).first
+            val unused = File(root, "old-preview.txt").apply {
+                writeText("expired")
+                assertTrue(setLastModified(System.currentTimeMillis() - 2 * 86_400_000L))
+            }
             assertEquals(first, cache.read(account, file).first)
+            assertTrue(unused.exists())
             val other = cache.read(account.copy(userId = "2"), file).first
             assertNotEquals(first, other)
+            assertFalse(unused.exists())
             assertEquals(2, requests)
             val failure = runCatching { cache.read(account, file.copy(url = "https://files.test/denied")) }.exceptionOrNull()
             assertNotNull(failure)

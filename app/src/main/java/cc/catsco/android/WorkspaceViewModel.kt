@@ -40,6 +40,13 @@ internal fun taskOutputTopic(page: String): String? =
 
 private fun cachesModuleResource(page: String): Boolean =
     page == "apps" || page == "skills" || page.startsWith("task-outputs/")
+private val cachedAccountPages = setOf("commercial", "commercial-plans", "commercial-topup", "usage")
+private const val AccountPageCacheMillis = 60_000L
+private const val RecentHistoryLimit = 8
+private const val RecentHistoryCharLimit = 256 * 1024
+private data class RecentHistory(val messages: List<ChatMessage>, val syncedThrough: Long)
+private data class CachedAccountPage(val resource: ResourceState, val loadedAt: Long)
+
 private data class AccountCacheWrite(
     val session: Session,
     val write: AccountStorage.() -> Unit,
@@ -168,6 +175,8 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     private val moduleDrafts = mutableMapOf<String, Map<String, String>>()
     private val moduleQueries = mutableMapOf<String, String>()
     private val libraryResources = mutableMapOf<String, ResourceState>()
+    private val accountPages = mutableMapOf<String, CachedAccountPage>()
+    private val recentHistory = LinkedHashMap<String, RecentHistory>(RecentHistoryLimit, .75f, true)
     private var commercialBeforeRedeem: ResourceState? = null
     private val accountCacheWrites = Channel<AccountCacheWrite>(Channel.UNLIMITED)
     private var active = true
@@ -230,6 +239,8 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private suspend fun activateCachedAccount(session: Session, coldStart: Boolean) {
+        accountPages.clear()
+        recentHistory.clear()
         val cached = withContext(Dispatchers.IO) {
             CachedAccount(storage.cachedWorkspace(session), storage.lastTaskEmployeeId(session),
                 storage.loadNotificationInbox(session, System.currentTimeMillis()), storage.draft(session, "new-task"))
@@ -313,6 +324,8 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         lastOutcomeAttempt = -1
         outcomeHistoryUnavailable = false
         libraryResources.clear()
+        accountPages.clear()
+        recentHistory.clear()
         commercialBeforeRedeem = null
         employeeSelectionExplicit = false
         restoreTaskEmployeeAfterConversation = false
@@ -514,6 +527,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refreshEntitlementsAfterRedemption() {
         commercialBeforeRedeem = null
+        accountPages.clear()
         if (mutable.value.page == "commercial") loadResource()
     }
 
@@ -573,8 +587,11 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         val libraryPage = cachesModuleResource(page)
         if (!libraryPage && cachesModuleResource(mutable.value.page)) libraryResources.clear()
         val query = if (page == "skills") moduleQuery("skills") else ""
+        val cachedAccountPage = accountPages[page]
+            ?.takeIf { SystemClock.elapsedRealtime() - it.loadedAt < AccountPageCacheMillis }?.resource
         val cachedResource = restoredResource
             ?: libraryResources[page]?.takeIf { reuseLibraryResource && it.query == query }
+            ?: cachedAccountPage
         val confirmedTopic = page.removePrefix("chat/")
         if (confirmedMessage != null) {
             if (timelineTopic != confirmedTopic) {
@@ -603,7 +620,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
             if (confirmedMessage == null) loadMessages(restoreCache = timeline.messages.isEmpty())
         } else {
             channel.attention("")
-            if (cachedResource == null && page !in setOf("home", "settings", "files", "appearance", "wallpaper", "offline", "notifications", "surfaces", "feedback", "server", "redeem")) loadResource()
+            if ((cachedResource == null || cachedAccountPage != null && restoredResource == null) &&
+                page !in setOf("home", "settings", "files", "appearance", "wallpaper", "offline", "notifications", "surfaces", "feedback", "server", "redeem")) {
+                loadResource()
+            }
         }
     }
 
@@ -895,6 +915,15 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         mutable.update { state -> state.copy(workspace = state.workspace.copy(conversations = state.workspace.conversations.map { chat -> if (chat.id == id) chat.copy(name = name) else chat })) }
     }
 
+    private fun rememberHistory(topic: String, snapshot: RecentHistory) {
+        if (snapshot.messages.sumOf { it.raw.length.toLong() } > RecentHistoryCharLimit) {
+            recentHistory.remove(topic)
+            return
+        }
+        recentHistory[topic] = snapshot
+        if (recentHistory.size > RecentHistoryLimit) recentHistory.remove(recentHistory.keys.first())
+    }
+
     fun loadMessages(older: Boolean = false, quiet: Boolean = false, restoreCache: Boolean = false) {
         val state = mutable.value
         val session = state.session ?: return
@@ -912,20 +941,21 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         historyJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 if (restoreCache) {
-                    val cached = withContext(Dispatchers.IO) {
+                    val cached = recentHistory[topic] ?: withContext(Dispatchers.IO) {
                         storage.read(session, "messages:$topic")?.let { raw ->
                             runCatching {
                                 val snapshot = JSONObject(raw)
                                 val messages = snapshot.objects("messages").map(::chatMessage)
                                 val oldestCached = messages.filter { it.sequence > 0 && it.kind != "runtime_plan" }
                                     .minOfOrNull { it.sequence } ?: 0
-                                messages to snapshot.optLong("history_synced_through", oldestCached)
+                                RecentHistory(messages, snapshot.optLong("history_synced_through", oldestCached))
                             }.getOrNull()
                         }
                     }
                     ensureActive()
                     if (generation != epoch || timelineTopic != topic || timeline !== requestedTimeline) return@launch
                     if (cached != null) {
+                        rememberHistory(topic, cached)
                         val (cachedMessages, syncedThrough) = cached
                         requestedTimeline.markHistorySyncedThrough(syncedThrough)
                         val liveKeys = requestedTimeline.messages.mapTo(hashSetOf()) { it.key }
@@ -959,13 +989,17 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                     beforeId = if (older || current.beforeId == 0L) page.beforeId else current.beforeId,
                     hasMore = if (older || current.beforeId == 0L) hasOlderPage else current.hasMore) }
                 if (messagesChanged || completedThrough != syncedThrough) {
-                    val snapshot = merged.filter { !it.streaming && (it.sequence <= completedThrough || it.kind == "runtime_plan") }.takeLast(100)
-                    accountCacheWrites.send(AccountCacheWrite(session, {
-                        write(session, "messages:$topic", JSONObject().put("history_synced_through", completedThrough)
-                            .put("messages", JSONArray(snapshot.map { message ->
-                                JSONObject(message.raw).apply { if (message.kind == "runtime_plan") put("_after_sequence", message.afterSequence) }
-                            })).toString())
-                    }))
+                    val messages = merged.filter { !it.streaming && (it.sequence <= completedThrough || it.kind == "runtime_plan") }.takeLast(100)
+                    val snapshot = RecentHistory(messages, completedThrough)
+                    if (snapshot != recentHistory[topic]) {
+                        rememberHistory(topic, snapshot)
+                        accountCacheWrites.send(AccountCacheWrite(session, {
+                            write(session, "messages:$topic", JSONObject().put("history_synced_through", completedThrough)
+                                .put("messages", JSONArray(messages.map { message ->
+                                    JSONObject(message.raw).apply { if (message.kind == "runtime_plan") put("_after_sequence", message.afterSequence) }
+                                })).toString())
+                        }))
+                    }
                 }
                 if (active && mutable.value.page == "chat/$topic") channel.read(topic, completedThrough)
             } catch (error: CancellationException) { throw error }
@@ -973,7 +1007,8 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                 if (epoch == generation && timelineTopic == topic) {
                     if (error is ApiFailure && error.status == 403) {
                         timeline = MessageTimeline()
-                        accountCacheWrites.trySend(AccountCacheWrite(session, { write(session, "messages:$topic", "{}") }))
+                        recentHistory.remove(topic)
+                        accountCacheWrites.trySend(AccountCacheWrite(session, { removeHistory(session, topic) }))
                         mutable.update { it.copy(messages = emptyList(), hasMore = false, beforeId = 0) }
                     }
                     if (older && (error !is ApiFailure || error.status !in setOf(401, 403))) {
@@ -1674,10 +1709,13 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun notice(text: String) { mutable.update { it.copy(notice = text) } }
+
     internal fun createCommercialPurchase(purchase: CommercialPurchase, onFailure: (String) -> Unit) {
-        val page = mutable.value.page
+        val current = mutable.value
+        val page = current.page
         val expectedPage = if (purchase.planId == null) "commercial-topup" else "commercial-plans"
-        val catalog = mutable.value.resource.value
+        if (!current.resource.loaded || current.resource.loading || current.resource.error != null) return
+        val catalog = current.resource.value
         if (page != expectedPage || !alipayAvailable(catalog)) return
         action(onFailure) { session ->
             val saved = withContext(Dispatchers.IO) {
@@ -1741,6 +1779,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         val order = checkNotNull(result.optJSONObject("order")) { "暂时无法读取订单，请重试。" }
         check(order.optString("order_no") == orderNo) { "暂时无法读取订单，请重试。" }
         if (commercialOrderFinished(order)) commercialPurchaseKey(order)?.let { key ->
+            if (order.optString("status") == "fulfilled") accountPages.clear()
             withContext(Dispatchers.IO) {
                 val saved = storage.read(session, key)?.takeIf(String::isNotBlank)?.let(::JSONObject)
                 if (saved?.optString("order_no") == orderNo) storage.write(session, key, "")
@@ -1794,26 +1833,31 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     }
     val serverAddress: String get() = preferences.getString("server", "https://app.catsco.cc") ?: "https://app.catsco.cc"
 
-    fun clearOfflineData() = action { session ->
+    fun clearOfflineData(includeDrafts: Boolean) = action { session ->
         historyJob?.cancel()
-        outcomeSyncJob?.cancel()
-        lastOutcomeAttempt = -1
         refreshJob?.cancel()
-        draftSaveJob?.cancel()
+        if (includeDrafts) draftSaveJob?.cancel()
+        libraryResources.clear()
+        accountPages.clear()
+        recentHistory.clear()
         val cleared = CompletableDeferred<Unit>()
-        accountCacheWrites.send(AccountCacheWrite(session, { clear(session) }, cleared))
+        accountCacheWrites.send(AccountCacheWrite(session, { clearOfflineData(session, includeDrafts) }, cleared))
         cleared.await()
         attachmentFiles.clear(session)
-        val since = System.currentTimeMillis()
-        notificationInbox.value = WorkspaceNotificationInbox(since = since, cursor = OutcomeCursor(since * 1000, 0))
-        persistNotifications()
-        observedRunStarts.clear()
-        val prefix = moduleDraftKey(session, "")
-        composerDrafts.keys.removeAll { it.startsWith(prefix) }
-        moduleDrafts.keys.removeAll { it.startsWith(prefix) }
-        moduleQueries.keys.removeAll { it.startsWith(prefix) }
-        mutable.update { it.copy(draft = "", attachments = emptyList(), taskCreationUncertain = false,
-            localDataEpoch = it.localDataEpoch + 1, notice = "离线缓存和本机草稿已清除。") }
+        if (!mutable.value.sending) {
+            timeline = MessageTimeline()
+            timelineTopic = ""
+            mutable.update { it.copy(messages = emptyList(), beforeId = 0, hasMore = false) }
+        }
+        if (includeDrafts) {
+            val prefix = moduleDraftKey(session, "")
+            composerDrafts.keys.removeAll { it.startsWith(prefix) }
+            moduleDrafts.keys.removeAll { it.startsWith(prefix) }
+            moduleQueries.keys.removeAll { it.startsWith(prefix) }
+            mutable.update { it.copy(draft = "", attachments = emptyList(), taskCreationUncertain = false,
+                localDataEpoch = it.localDataEpoch + 1) }
+        }
+        notice(if (includeDrafts) "离线缓存和本机草稿已清除。" else "本机缓存已清除。")
     }
 
     fun openUrl(url: String) {
@@ -1900,17 +1944,22 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                     if (cachesModuleResource(page) && !failedOutput) {
                         libraryResources[page] = loaded
                     }
+                    if (page in cachedAccountPages) accountPages[page] = CachedAccountPage(loaded, SystemClock.elapsedRealtime())
                     mutable.update { it.copy(resource = loaded) }
                 }
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 if (generation == epoch && mutable.value.page == page) {
                     if (error is ApiFailure && error.status == 401) report(error)
-                    else mutable.update { it.copy(resource = it.resource.copy(
-                        loading = false,
-                        error = error.message ?: "读取失败，请重试。",
-                        errorStatus = (error as? ApiFailure)?.status,
-                    )) }
+                    else {
+                        val status = (error as? ApiFailure)?.status
+                        if (status == 403 || status == 404) accountPages.remove(page)
+                        mutable.update { it.copy(resource = it.resource.copy(
+                            loading = false,
+                            error = error.message ?: "读取失败，请重试。",
+                            errorStatus = status,
+                        )) }
+                    }
                 }
             }
         }

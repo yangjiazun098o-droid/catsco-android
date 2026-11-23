@@ -99,6 +99,24 @@ class AccountStorage(context: Context) {
         prefs.all.keys.filter { it.startsWith(prefix) }.forEach(editor::remove)
         check(editor.commit()) { "无法清除本机资料。" }
     }
+
+    internal fun clearOfflineData(session: Session, includeDrafts: Boolean) {
+        val prefix = prefix(session)
+        val editor = prefs.edit()
+        for (key in prefs.all.keys) {
+            if (!key.startsWith(prefix)) continue
+            val name = key.removePrefix(prefix)
+            if (name == "workspace" || name.startsWith("messages:") ||
+                (includeDrafts && (name.startsWith("draft:") || name.startsWith("module-draft:")))) {
+                editor.remove(key)
+            }
+        }
+        check(editor.commit()) { "无法清除本机缓存。" }
+    }
+
+    internal fun removeHistory(session: Session, topic: String) {
+        check(prefs.edit().remove(prefix(session) + "messages:$topic").commit()) { "无法清除本机会话缓存。" }
+    }
 }
 
 fun attachment(json: JSONObject): Attachment = Attachment(
