@@ -69,7 +69,7 @@ internal fun NativeSettings(
         }
         item(key = "agents-and-devices") {
             SettingsGroup("工作空间", listOf(
-                SettingsEntry("员工管理", R.drawable.e_agent),
+                SettingsEntry("员工管理", R.drawable.ic_employee_badge),
                 SettingsEntry("定制 Agent", R.drawable.e_sparkle),
                 SettingsEntry("联系人与群组", R.drawable.e_people),
                 SettingsEntry("我的电脑", R.drawable.e_computer),

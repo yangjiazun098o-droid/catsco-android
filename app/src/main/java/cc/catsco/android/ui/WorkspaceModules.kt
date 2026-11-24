@@ -1104,12 +1104,12 @@ private fun ContactsScreen(state: WorkspaceState, model: WorkspaceViewModel) {
 @Composable
 private fun AgentsScreen(state: WorkspaceState, model: WorkspaceViewModel) {
     val roster = state.resource.value.objects("bots", "agents").filter { it.first("id", "uid", "user_id").isNotBlank() }
-    Records(roster, R.drawable.e_agent, empty = "还没有员工",
+    Records(roster, R.drawable.ic_employee_badge, empty = "还没有员工",
         showEmpty = !state.resource.loading && state.resource.error == null,
         detail = { if (employee(it).owner) "我的员工" else "协作员工" },
         leading = { record ->
             CatsCoAccountAvatar(state.session?.copy(avatarUrl = record.first("avatar_url")), model.accountImages,
-                Modifier.size(40.dp), shape = CatsCoMobileSpec.fieldShape, fallbackIcon = R.drawable.e_agent)
+                Modifier.size(40.dp), shape = CatsCoMobileSpec.fieldShape, fallbackIcon = R.drawable.ic_employee_badge)
         },
         onClick = {
             val selected = employee(it)
