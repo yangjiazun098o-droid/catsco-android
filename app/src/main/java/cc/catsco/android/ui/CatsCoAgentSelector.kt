@@ -165,7 +165,7 @@ private fun AgentIdentity(employee: Employee, session: Session?, images: ImageLo
     val avatar: @Composable () -> Unit = {
         Box(Modifier.size(if (compact) 48.dp else 80.dp)) {
             CatsCoAccountAvatar(session?.copy(avatarUrl = employee.avatarUrl), images,
-                Modifier.fillMaxSize().shadow(6.dp, shape), shape, R.drawable.e_agent)
+                Modifier.fillMaxSize().shadow(6.dp, shape), shape, R.drawable.ic_employee_badge)
             Box(Modifier.align(Alignment.BottomEnd).offset(x = 3.dp, y = 3.dp).size(16.dp)
                 .background(MaterialTheme.colorScheme.background, CircleShape).padding(3.dp)
                 .background(if (employee.online) Mint else MaterialTheme.colorScheme.onSurfaceVariant, CircleShape))

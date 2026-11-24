@@ -34,7 +34,7 @@ internal fun AgentSettingsSheet(employee: Employee, state: WorkspaceState, model
             Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 CatsCoAccountAvatar(
                     state.session?.copy(avatarUrl = employee.avatarUrl), model.accountImages,
-                    Modifier.size(56.dp), RoundedCornerShape(14.dp), fallbackIcon = R.drawable.e_agent,
+                    Modifier.size(56.dp), RoundedCornerShape(14.dp), fallbackIcon = R.drawable.ic_employee_badge,
                 )
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(employee.name, fontSize = 18.sp, lineHeight = 25.sp, fontWeight = FontWeight.SemiBold, maxLines = 3, overflow = TextOverflow.Ellipsis)

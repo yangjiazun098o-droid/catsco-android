@@ -1188,7 +1188,7 @@ private fun EmployeeIdentity(state: WorkspaceState, model: WorkspaceViewModel, e
     ModuleSection {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             CatsCoAccountAvatar(state.session?.copy(avatarUrl = employee?.avatarUrl.orEmpty()), model.accountImages,
-                Modifier.size(56.dp), shape = CatsCoMobileSpec.fieldShape, fallbackIcon = R.drawable.e_agent)
+                Modifier.size(56.dp), shape = CatsCoMobileSpec.fieldShape, fallbackIcon = R.drawable.ic_employee_badge)
             Column(Modifier.weight(1f)) {
                 Text(employee?.name.orEmpty(), fontSize = 19.sp, fontWeight = FontWeight.Medium)
                 val detail = subtitle ?: employee?.let { if (it.online) "在线" else "离线" }
