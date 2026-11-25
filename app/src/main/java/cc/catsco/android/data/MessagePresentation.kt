@@ -234,7 +234,9 @@ internal fun projectMessages(messages: List<ChatMessage>, currentUser: String, a
             trace.first, trace.second,
             working.filter { it.optString("type") == "assistant_text" }.map { it.first("text", "content") }.filter(String::isNotBlank),
             output.filter { it.optString("type") == "text" }.map { it.first("text", "content") }.filter(String::isNotBlank),
-            output.filter { it.optString("type") in mediaTypes }.map { attachment(it.optJSONObject("payload") ?: it) }.filter { it.url.isNotBlank() }.distinctBy { it.url },
+            output.filter { it.optString("type") in mediaTypes }
+                .map { attachment(it.optJSONObject("payload") ?: it).withImageHint(it.optString("type")) }
+                .filter { it.url.isNotBlank() }.distinctBy { it.url },
             state, group.any { it.streaming }, finalMessage.sequence, quote,
             sourceMessageIds = group.map { it.sequence }.filter { it > 0 }.toSet(), followup = followup,
         ).also { nextGroups[first.key] = CachedMessageTurn(group, isAssistant, quote, followup, it) }

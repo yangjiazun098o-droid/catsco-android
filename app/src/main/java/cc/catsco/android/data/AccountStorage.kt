@@ -124,6 +124,9 @@ fun attachment(json: JSONObject): Attachment = Attachment(
     json.first("mime_type", "mime").ifBlank { "application/octet-stream" }, json.toString(),
 )
 
+internal fun Attachment.withImageHint(type: String): Attachment =
+    if (type == "image" && mime == "application/octet-stream") copy(mime = "image/*") else this
+
 fun chatMessage(raw: JSONObject): ChatMessage {
     val metadata = raw.optJSONObject("metadata") ?: runCatching { JSONObject(raw.optString("metadata")) }.getOrDefault(JSONObject())
     val content = raw.opt("content")
@@ -143,7 +146,8 @@ fun chatMessage(raw: JSONObject): ChatMessage {
         }
     }
     val files = blocks.filter { it.optString("type") in setOf("image", "file", "audio", "video") }
-        .map { attachment(it.optJSONObject("payload") ?: it) }.filter { it.url.isNotBlank() }.toMutableList()
+        .map { attachment(it.optJSONObject("payload") ?: it).withImageHint(it.optString("type")) }
+        .filter { it.url.isNotBlank() }.toMutableList()
     val workingTypes = setOf("thinking", "tool_use", "tool_call", "tool_result", "assistant_text", "reasoning", "runtime_plan")
     val explicitKind = raw.first("type", "msg_type").ifBlank { decoded?.optString("type").orEmpty().ifBlank { "text" } }
     val planPayload = decoded?.optJSONObject("payload") ?: raw.optJSONObject("payload")
@@ -154,6 +158,7 @@ fun chatMessage(raw: JSONObject): ChatMessage {
     } else explicitKind
     if (kind in setOf("image", "file", "audio", "video")) {
         val file = attachment(decoded?.optJSONObject("payload") ?: raw.optJSONObject("payload") ?: decoded ?: raw)
+            .withImageHint(kind)
         if (file.url.isNotBlank()) files.add(file)
     }
     val text = when {

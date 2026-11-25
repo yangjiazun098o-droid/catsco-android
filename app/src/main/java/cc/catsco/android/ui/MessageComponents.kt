@@ -91,7 +91,7 @@ fun MessageTurnContent(
                             }
                         }
                     }
-                    turn.files.forEach { file -> MessageFileCard(file, filesEnabled, onPreview, onDownload, attachmentFailure?.takeIf { it.first == file.url }?.second) }
+                    turn.files.forEach { file -> MessageAttachment(file, filesEnabled, onPreview, onDownload, attachmentFailure) }
                 }
             }
             if (showSentReceipt) {
@@ -107,11 +107,14 @@ fun MessageTurnContent(
         if (senderName.isNotBlank() || activity != null) AgentMessageHeader(senderName.ifBlank { "Agent" }, activity)
         turn.progress.forEach { MessageReplyBody(listOf(it)) }
         if (turn.hasProcess) MessageWorkingProcess(turn, active)
-        turn.files.forEach { file -> MessageFileCard(file, filesEnabled, onPreview, onDownload, attachmentFailure?.takeIf { it.first == file.url }?.second) }
+        turn.files.forEach { file -> MessageAttachment(file, filesEnabled, onPreview, onDownload, attachmentFailure) }
         if (turn.text.isNotEmpty() || loadingReply) {
             val reply: @Composable (Modifier) -> Unit = { modifier ->
                 AgentReplyBubble(loadingReply, modifier) {
-                    if (turn.text.isNotEmpty()) MessageReplyContent(turn.text)
+                    if (turn.text.isNotEmpty()) {
+                        val attachedUrls = remember(turn.files) { turn.files.mapTo(mutableSetOf()) { it.url } }
+                        MessageReplyContent(turn.text, attachedUrls)
+                    }
                 }
             }
             if (turn.assistant && onQuote != null && onRegenerate != null) {
@@ -138,10 +141,10 @@ private fun MessageReplyBody(paragraphs: List<String>, modifier: Modifier = Modi
 }
 
 @Composable
-private fun MessageReplyContent(paragraphs: List<String>) {
+private fun MessageReplyContent(paragraphs: List<String>, attachedUrls: Set<String> = emptySet()) {
     CompositionLocalProvider(LocalMarkdownForeground provides conversationBubbleTextColor(mine = false)) {
         Column(Modifier.padding(horizontal = 15.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            paragraphs.forEach { MarkdownContent(it) }
+            paragraphs.forEach { MarkdownContent(it, attachedImageUrls = attachedUrls) }
         }
     }
 }
@@ -379,6 +382,20 @@ private fun PlanStatusIcon(status: String, modifier: Modifier) {
         val icon = when (value) { "completed" -> R.drawable.e_check_circle; "in_progress" -> R.drawable.e_progress_circle; else -> R.drawable.e_circle }
         Icon(painterResource(icon), null, Modifier.fillMaxSize(), tint = color)
     }
+}
+
+@Composable
+private fun MessageAttachment(
+    file: Attachment,
+    enabled: Boolean,
+    onPreview: (Attachment) -> Unit,
+    onDownload: (Attachment) -> Unit,
+    attachmentFailure: Pair<String, String>?,
+) {
+    val error = attachmentFailure?.takeIf { it.first == file.url }?.second
+    val request = messageImageRequest(file)
+    if (request != null) MessageImageThumbnail(file, request, enabled, onPreview, onDownload, error)
+    else MessageFileCard(file, enabled, onPreview, onDownload, error)
 }
 
 @Composable

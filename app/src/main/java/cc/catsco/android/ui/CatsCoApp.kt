@@ -64,6 +64,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import cc.catsco.android.*
 import cc.catsco.android.R
 import cc.catsco.android.data.VoiceDestination
+import cc.catsco.android.data.isImageAttachment
 import cc.catsco.core.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -210,7 +211,9 @@ internal fun workspaceBackdropBlur(drawer: DrawerState, drawerWidth: Int, agentB
             model.urlOpened()
         }
     }
-    LaunchedEffect(state.localFile) {
+    val imageFile = state.localFile?.takeIf { isImageAttachment(it.mime, it.name) }
+    if (imageFile != null) AttachmentImagePreview(imageFile, model.accountImages, model::fileOpened)
+    else LaunchedEffect(state.localFile) {
         state.localFile?.let { file ->
             try {
                 val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(file.uri, file.mime).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)

@@ -28,6 +28,7 @@ import cc.catsco.android.conversationRunning
 import cc.catsco.android.data.MessageTurn
 import cc.catsco.android.data.MessagePresentationCache
 import cc.catsco.android.data.projectMessages
+import cc.catsco.core.Attachment
 import cc.catsco.core.ChatMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.conflate
@@ -44,6 +45,10 @@ import org.commonmark.node.ThematicBreak
 import org.commonmark.node.BulletList
 import org.commonmark.node.OrderedList
 import org.commonmark.node.Heading
+import org.commonmark.node.Image as MarkdownImage
+import org.commonmark.node.HardLineBreak
+import org.commonmark.node.Paragraph
+import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.Text as MarkdownLiteral
 import org.commonmark.node.Code
 import org.commonmark.ext.gfm.tables.TableBlock
@@ -125,7 +130,17 @@ fun ConversationScreen(state: WorkspaceState, model: WorkspaceViewModel, modifie
     val currentReplyKey = displayTurns.lastOrNull { it.assistant }?.key
     val showConnection = state.connection in setOf("未连接", "连接已断开", "正在重连")
     val hasHeader = state.messageTarget > 0 || showConnection
-    CompositionLocalProvider(LocalOpenSidebar provides onOpenSidebar, LocalMarkdownDocuments provides documents) {
+    val filesEnabled = !state.busy && state.exportFile == null
+    val images = remember(state.session, model, filesEnabled, state.attachmentFailure) {
+        state.session?.let {
+            ConversationImages(it, model.accountImages, model::openAttachment, filesEnabled, state.attachmentFailure)
+        }
+    }
+    CompositionLocalProvider(
+        LocalOpenSidebar provides onOpenSidebar,
+        LocalMarkdownDocuments provides documents,
+        LocalConversationImages provides images,
+    ) {
         Column(modifier.fillMaxSize()) {
             if (hasHeader) Spacer(Modifier.height(topContentPadding))
             if (state.messageTarget > 0) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -152,7 +167,7 @@ fun ConversationScreen(state: WorkspaceState, model: WorkspaceViewModel, modifie
                         mine = turn.senderId == userId,
                         senderName = turn.senderName.ifBlank { agents.find { it.id == turn.senderId }?.name.orEmpty() },
                         active = (activeTask || awaitingReply) && turn.key == currentReplyKey,
-                        filesEnabled = !turn.pendingDelivery && !state.busy && state.exportFile == null,
+                        filesEnabled = !turn.pendingDelivery && filesEnabled,
                         onPreview = model::openAttachment,
                         onDownload = model::downloadAttachment,
                         attachmentFailure = state.attachmentFailure,
@@ -206,7 +221,7 @@ internal fun conversationDisplayTurns(turns: List<MessageTurn>, active: Boolean,
 }
 
 @Composable
-fun MarkdownContent(text: String) {
+fun MarkdownContent(text: String, attachedImageUrls: Set<String>? = null) {
     val context = LocalContext.current
     val foreground = markdownForeground().toArgb()
     val link = MaterialTheme.colorScheme.primary.toArgb()
@@ -237,12 +252,12 @@ fun MarkdownContent(text: String) {
     val docs = LocalMarkdownDocuments.current ?: remember { MarkdownDocuments() }
     val ready = remember(docs, text) { docs.cached(text) ?: if (text.length < 1200) docs.parse(text) else null }
     if (ready != null) {
-        MarkdownBlocks(renderer, ready)
+        MarkdownBlocks(renderer, ready, attachedImageUrls = attachedImageUrls)
     } else {
         val parsed by produceState<List<Node>?>(null, docs, text) {
             value = withContext(Dispatchers.Default) { docs.parse(text) }
         }
-        parsed?.let { MarkdownBlocks(renderer, it) } ?: Spacer(Modifier.height(25.dp))
+        parsed?.let { MarkdownBlocks(renderer, it, attachedImageUrls = attachedImageUrls) } ?: Spacer(Modifier.height(25.dp))
     }
 }
 
@@ -254,7 +269,7 @@ private fun markdownForeground() = LocalMarkdownForeground.current.takeOrElse {
 }
 
 @Composable
-private fun MarkdownBlocks(renderer: Markwon, blocks: List<Node>, spacing: Dp = 14.dp) {
+private fun MarkdownBlocks(renderer: Markwon, blocks: List<Node>, spacing: Dp = 14.dp, attachedImageUrls: Set<String>? = null) {
     Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
         blocks.forEachIndexed { index, block ->
             if (block is ThematicBreak) {
@@ -280,17 +295,44 @@ private fun MarkdownBlocks(renderer: Markwon, blocks: List<Node>, spacing: Dp = 
                                     lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Top, LineHeightStyle.Trim.FirstLineTop),
                                 ),
                             )
-                            Box(Modifier.weight(1f)) { MarkdownBlocks(renderer, item.children(), spacing = 8.dp) }
+                            Box(Modifier.weight(1f)) {
+                                MarkdownBlocks(renderer, item.children(), spacing = 8.dp, attachedImageUrls = attachedImageUrls)
+                            }
                         }
                     }
                 }
             } else if (block is TableBlock) {
                 MarkdownTable(renderer, block)
+            } else if (block is Paragraph && attachedImageUrls != null && LocalConversationImages.current != null) {
+                MarkdownImageParagraph(renderer, block, attachedImageUrls)
             } else {
                 val headingSpacing = if (block is Heading && index > 0) Modifier.padding(top = 9.dp, bottom = 2.dp) else Modifier
                 MarkdownText(renderer, block, Modifier.fillMaxWidth().then(headingSpacing))
             }
         }
+    }
+}
+
+@Composable
+private fun MarkdownImageParagraph(renderer: Markwon, block: Paragraph, attachedImageUrls: Set<String>) {
+    val images = checkNotNull(LocalConversationImages.current)
+    val children = remember(block) { block.children() }
+    val inlineImages = children.filterIsInstance<MarkdownImage>().distinctBy { it.destination }
+    val previews = inlineImages.mapNotNull { image ->
+        if (image.destination in attachedImageUrls) return@mapNotNull null
+        val file = remember(image) {
+            Attachment(image.children().joinToString("") { it.plainText() }.ifBlank { "图片" }, image.destination, "image/*", "")
+        }
+        messageImageRequest(file)?.let { file to it }
+    }
+    val imageOnly = inlineImages.isNotEmpty() && children.all { it is MarkdownImage || it is SoftLineBreak || it is HardLineBreak }
+    val allImagesRepresented = previews.size + inlineImages.count { it.destination in attachedImageUrls } == inlineImages.size
+    if (!imageOnly || !allImagesRepresented) MarkdownText(renderer, block, Modifier.fillMaxWidth())
+    previews.forEach { (file, request) ->
+        MessageImageThumbnail(
+            file, request, enabled = images.previewEnabled, onPreview = images.onPreview,
+            error = images.attachmentFailure?.takeIf { it.first == file.url }?.second,
+        )
     }
 }
 

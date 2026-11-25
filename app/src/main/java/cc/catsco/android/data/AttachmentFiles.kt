@@ -49,9 +49,10 @@ internal class AttachmentFiles(private val root: File, private val client: OkHtt
                     (file.nameWithoutExtension.substringAfterLast('-').toLongOrNull() ?: 0L) > now
             }
             val mimeTypes = MimeTypeMap.getSingleton()
+            val needsDetectedMime = attachment.mime == "application/octet-stream" || attachment.mime == "image/*"
             if (cached != null) {
                 if (now - cached.lastModified() > 60_000L) cached.setLastModified(now)
-                val mime = if (attachment.mime == "application/octet-stream") mimeTypes.getMimeTypeFromExtension(cached.extension) ?: attachment.mime else attachment.mime
+                val mime = if (needsDetectedMime) mimeTypes.getMimeTypeFromExtension(cached.extension) ?: attachment.mime else attachment.mime
                 return@withLock cached to mime
             }
             val origin = session.server.value.toHttpUrl()
@@ -66,7 +67,12 @@ internal class AttachmentFiles(private val root: File, private val client: OkHtt
                 val body = response.body ?: error("文件内容为空。")
                 val limit = 100L * 1024 * 1024
                 require(body.contentLength() <= limit) { "文件超过 100 MB，请在网页版打开。" }
-                val mime = if (attachment.mime == "application/octet-stream") body.contentType()?.toString()?.substringBefore(';') ?: attachment.mime else attachment.mime
+                val detectedMime = body.contentType()?.toString()?.substringBefore(';')
+                val mime = when {
+                    attachment.mime == "application/octet-stream" -> detectedMime ?: attachment.mime
+                    attachment.mime == "image/*" && detectedMime?.startsWith("image/") == true -> detectedMime
+                    else -> attachment.mime
+                }
                 val extension = attachment.name.substringAfterLast('.', "").lowercase().takeIf { it.length in 1..16 && it.all(Char::isLetterOrDigit) }
                     ?: mimeTypes.getExtensionFromMimeType(mime) ?: "bin"
                 val tmp = File.createTempFile("attachment-", ".part", directory)

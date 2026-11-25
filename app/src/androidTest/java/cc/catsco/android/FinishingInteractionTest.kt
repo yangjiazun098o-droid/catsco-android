@@ -2,6 +2,7 @@ package cc.catsco.android
 
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -27,6 +28,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import cc.catsco.android.data.MessageTurn
+import cc.catsco.android.data.MessagePresentationCache
+import cc.catsco.android.data.chatMessage
+import cc.catsco.android.data.projectMessages
 import cc.catsco.android.data.VoiceCapture
 import cc.catsco.android.data.VoiceCharacterLimit
 import cc.catsco.android.data.VoiceDestination
@@ -44,6 +48,83 @@ import java.io.FileInputStream
 
 class FinishingInteractionTest {
     @get:Rule val compose = createEmptyComposeRule()
+
+    @Test fun conversationRendersAttachedAndMarkdownImages() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val session = cc.catsco.core.Session(cc.catsco.core.ServerAddress.parse("https://chat.example.test"), "test-only", "1", "Test")
+        val history = chatMessage(JSONObject("""
+            {"id":1,"from":"usr1","content_blocks":[
+                {"type":"image","payload":{"name":"屏幕截图","url":"/api/files/1"}}
+            ]}
+        """.trimIndent()))
+        val sent = projectMessages(listOf(history), session.userId, emptySet(), emptyMap(), emptySet(), MessagePresentationCache()).single()
+        val attached = sent.files.single()
+        assertEquals("image/*", attached.mime)
+        val markdownUrl = "https://media.example.test/chart.png"
+        val requests = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val imageColor = android.graphics.Color.rgb(60, 120, 180)
+        val loader = coil.ImageLoader.Builder(context).components {
+            add(coil.intercept.Interceptor { chain ->
+                requests[chain.request.data.toString()] = chain.request.headers["Authorization"].orEmpty()
+                coil.request.SuccessResult(
+                    android.graphics.drawable.ColorDrawable(imageColor), chain.request, coil.decode.DataSource.MEMORY,
+                )
+            })
+        }.build()
+        var preview: cc.catsco.core.Attachment? = null
+        val openImage: (cc.catsco.core.Attachment) -> Unit = { preview = it }
+        try {
+            show {
+                CompositionLocalProvider(LocalConversationImages provides ConversationImages(session, loader, openImage, true, null)) {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        MessageTurnContent(sent, true, "", false, true, openImage, {})
+                        MessageTurnContent(reply.copy(text = listOf("![回复图片]($markdownUrl)")),
+                            false, "Agent", false, true, openImage, {})
+                    }
+                }
+            }
+            compose.waitUntil(5_000) { requests.size == 2 }
+            assertEquals("Bearer test-only", requests["https://chat.example.test/api/files/1"])
+            assertEquals("", requests[markdownUrl])
+            val photos = compose.onAllNodesWithTag("message-image-thumbnail").assertCountEquals(2)
+            val pixels = photos[0].captureToImage().toPixelMap()
+            assertEquals(imageColor, pixels[pixels.width / 2, pixels.height / 3].toArgb())
+            compose.onNodeWithContentDescription(attached.name).performClick()
+            compose.runOnIdle { assertEquals(attached, preview) }
+        } finally {
+            loader.shutdown()
+        }
+    }
+
+    @Test fun downloadedImageOpensInConversationAndCanBeClosed() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val image = java.io.File.createTempFile("conversation-preview-", ".png", context.cacheDir)
+        val bitmap = android.graphics.Bitmap.createBitmap(96, 96, android.graphics.Bitmap.Config.ARGB_8888)
+        val color = android.graphics.Color.rgb(60, 120, 180)
+        bitmap.eraseColor(color)
+        image.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+        val file = OpenLocalFile(android.net.Uri.fromFile(image), "image/png", "会话图片.png")
+        val loader = coil.ImageLoader.Builder(context).build()
+        try {
+            show {
+                var visible by remember { mutableStateOf(true) }
+                if (visible) {
+                    AttachmentImagePreview(file, loader) { visible = false }
+                }
+            }
+            val preview = compose.onNodeWithTag("attachment-image-preview").assertIsDisplayed()
+            compose.waitUntil(5_000) {
+                val pixels = preview.captureToImage().toPixelMap()
+                pixels[pixels.width / 2, pixels.height / 2].toArgb() == color
+            }
+            compose.onNodeWithContentDescription("关闭图片").performClick()
+            preview.assertDoesNotExist()
+        } finally {
+            loader.shutdown()
+            image.delete()
+        }
+    }
     private lateinit var host: MessageReviewActivity
     private lateinit var drawer: DrawerState
     private val reply = MessageTurn("reply", "9", "Agent", true, emptyList(), emptyList(), emptyList(),
